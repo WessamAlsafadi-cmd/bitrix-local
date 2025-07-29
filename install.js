@@ -78,13 +78,13 @@ class CustomChannelApp {
             LINE: 1,
             DATA: {
                 id: this.connectorId,
-                url: 'https://your-render-app.onrender.com/webhook',
+                url: 'https://bitrix-local.onrender.com/webhook',
                 name: 'Custom WhatsApp Connector',
                 description: 'Connect regular WhatsApp via Baileys.js',
                 icon: 'fa fa-whatsapp',
                 settings: {
                     phone_number: '',
-                    webhook_url: 'https://your-render-app.onrender.com/bitrix24/webhook',
+                    webhook_url: 'https://bitrix-local.onrender.com/bitrix24/webhook',
                     status: 'inactive'
                 }
             }
@@ -102,7 +102,7 @@ class CustomChannelApp {
     async bindPlacement() {
         const params = {
             PLACEMENT: 'CONTACT_CENTER',
-            HANDLER: 'https://your-render-app.onrender.com/app/widget',
+            HANDLER: 'https://bitrix-local.onrender.com/app/widget',
             TITLE: 'Custom WhatsApp',
             DESCRIPTION: 'Manage WhatsApp conversations'
         };
