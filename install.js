@@ -1,8 +1,7 @@
 /**
  * Bitrix24 Custom WhatsApp Connector - Node.js Installation Server
- * Replaces install.php for Render.com deployment
+ * Fixed version with proper routing
  */
-
 const express = require('express');
 const axios = require('axios');
 const querystring = require('querystring');
@@ -18,6 +17,10 @@ const APP_SCOPE = 'imconnector,imopenlines,crm';
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+console.log('🚀 Starting Bitrix24 WhatsApp Connector Installer...');
+console.log('📍 APP_ID:', APP_ID);
+console.log('🌐 PORT:', PORT);
 
 class CustomChannelApp {
     constructor(domain, accessToken) {
@@ -170,79 +173,61 @@ class CustomChannelApp {
 
 // Health check
 app.get('/health', (req, res) => {
+    console.log('📊 Health check requested');
     res.json({ 
         status: 'ok', 
         timestamp: new Date().toISOString(),
-        service: 'Bitrix24 WhatsApp Connector Installer'
+        service: 'Bitrix24 WhatsApp Connector Installer',
+        routes: ['/', '/install.js', '/oauth/callback', '/health']
     });
 });
 
-// Installation form (replaces the PHP form)
+// Main installation form (root route)
 app.get('/', (req, res) => {
-    const html = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Custom WhatsApp Connector - Installation</title>
-        <style>
-            body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
-            .form-group { margin-bottom: 15px; }
-            label { display: block; margin-bottom: 5px; font-weight: bold; }
-            input[type="text"] { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
-            button { background: #25d366; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
-            button:hover { background: #128c7e; }
-            .info { background: #f0f8ff; padding: 15px; border-left: 4px solid #007bff; margin-bottom: 20px; }
-            .debug { background: #f5f5f5; padding: 10px; margin: 10px 0; border-left: 3px solid #666; }
-        </style>
-    </head>
-    <body>
-        <h1>Custom WhatsApp Connector - Node.js Version</h1>
-        
-        <div class="debug">
-            <strong>Debug Info:</strong><br>
-            Current URL: ${req.protocol}://${req.get('host')}${req.originalUrl}<br>
-            Node.js Working: ✅<br>
-            Time: ${new Date().toISOString()}<br>
-            APP_ID: ${APP_ID}
-        </div>
-        
-        <div class="info">
-            <h3>Installation Instructions:</h3>
-            <ol>
-                <li>Enter your Bitrix24 domain below</li>
-                <li>Click "Install App" to authorize</li>
-                <li>Complete the OAuth flow</li>
-                <li>Your custom connector will be registered</li>
-            </ol>
-        </div>
-        
-        <form id="installForm">
-            <div class="form-group">
-                <label for="domain">Bitrix24 Domain:</label>
-                <input type="text" id="domain" name="domain" placeholder="your-company.bitrix24.com" required>
-            </div>
-            <button type="submit">Install App</button>
-        </form>
-        
-        <script>
-        document.getElementById('installForm').addEventListener('submit', function(e) {
-            e.preventDefault();
-            const domain = document.getElementById('domain').value;
-            const authUrl = \`https://\${domain}/oauth/authorize/?client_id=${APP_ID}&response_type=code&scope=${APP_SCOPE}&redirect_uri=\${window.location.origin}/oauth/callback\`;
-            console.log('Redirecting to:', authUrl);
-            window.location.href = authUrl;
-        });
-        </script>
-    </body>
-    </html>
-    `;
-    
-    res.send(html);
+    console.log('🏠 Root route accessed');
+    res.send(getInstallationHTML(req));
 });
 
-// OAuth callback handler (replaces PHP OAuth handling)
+// IMPORTANT: Add /install.js route for Bitrix24
+app.get('/install.js', (req, res) => {
+    console.log('📱 /install.js route accessed');
+    console.log('Query params:', req.query);
+    
+    // Extract domain from Bitrix24 parameters
+    const domain = req.query.DOMAIN;
+    if (domain) {
+        // Redirect to OAuth directly if we have domain
+        const authUrl = `https://${domain}/oauth/authorize/?client_id=${APP_ID}&response_type=code&scope=${APP_SCOPE}&redirect_uri=${req.protocol}://${req.get('host')}/oauth/callback`;
+        console.log('🔀 Redirecting to OAuth:', authUrl);
+        return res.redirect(authUrl);
+    }
+    
+    // Otherwise show installation form
+    res.send(getInstallationHTML(req));
+});
+
+// POST version for install.js (some Bitrix24 versions use POST)
+app.post('/install.js', (req, res) => {
+    console.log('📱 POST /install.js route accessed');
+    console.log('Body params:', req.body);
+    
+    const domain = req.body.DOMAIN || req.query.DOMAIN;
+    if (domain) {
+        const authUrl = `https://${domain}/oauth/authorize/?client_id=${APP_ID}&response_type=code&scope=${APP_SCOPE}&redirect_uri=${req.protocol}://${req.get('host')}/oauth/callback`;
+        console.log('🔀 Redirecting to OAuth:', authUrl);
+        return res.redirect(authUrl);
+    }
+    
+    res.send(getInstallationHTML(req));
+});
+
+// OAuth callback handler
 app.get('/oauth/callback', async (req, res) => {
     const { code, domain, state } = req.query;
+    
+    console.log('🔄 OAuth callback received');
+    console.log('Domain:', domain);
+    console.log('Code:', code ? code.substring(0, 20) + '...' : 'missing');
     
     if (!code || !domain) {
         return res.status(400).json({
@@ -253,8 +238,6 @@ app.get('/oauth/callback', async (req, res) => {
     
     try {
         console.log('🔄 Processing OAuth callback...');
-        console.log('Domain:', domain);
-        console.log('Code:', code.substring(0, 20) + '...');
         
         // Exchange code for access token
         const tokenUrl = `https://${domain}/oauth/token/`;
@@ -275,7 +258,6 @@ app.get('/oauth/callback', async (req, res) => {
         });
         
         console.log('📡 Token response code:', tokenResponse.status);
-        console.log('📄 Token response:', JSON.stringify(tokenResponse.data).substring(0, 200) + '...');
         
         const tokenResult = tokenResponse.data;
         
@@ -340,10 +322,73 @@ app.get('/oauth/callback', async (req, res) => {
     }
 });
 
+function getInstallationHTML(req) {
+    return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Custom WhatsApp Connector - Installation</title>
+        <style>
+            body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+            .form-group { margin-bottom: 15px; }
+            label { display: block; margin-bottom: 5px; font-weight: bold; }
+            input[type="text"] { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+            button { background: #25d366; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
+            button:hover { background: #128c7e; }
+            .info { background: #f0f8ff; padding: 15px; border-left: 4px solid #007bff; margin-bottom: 20px; }
+            .debug { background: #f5f5f5; padding: 10px; margin: 10px 0; border-left: 3px solid #666; }
+        </style>
+    </head>
+    <body>
+        <h1>Custom WhatsApp Connector - Node.js Version</h1>
+        
+        <div class="debug">
+            <strong>Debug Info:</strong><br>
+            Current URL: ${req.protocol}://${req.get('host')}${req.originalUrl}<br>
+            Node.js Working: ✅<br>
+            Time: ${new Date().toISOString()}<br>
+            APP_ID: ${APP_ID}<br>
+            Available Routes: /, /install.js, /oauth/callback, /health
+        </div>
+        
+        <div class="info">
+            <h3>Installation Instructions:</h3>
+            <ol>
+                <li>Enter your Bitrix24 domain below</li>
+                <li>Click "Install App" to authorize</li>
+                <li>Complete the OAuth flow</li>
+                <li>Your custom connector will be registered</li>
+            </ol>
+        </div>
+        
+        <form id="installForm">
+            <div class="form-group">
+                <label for="domain">Bitrix24 Domain:</label>
+                <input type="text" id="domain" name="domain" placeholder="your-company.bitrix24.com" required>
+            </div>
+            <button type="submit">Install App</button>
+        </form>
+        
+        <script>
+        document.getElementById('installForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const domain = document.getElementById('domain').value;
+            const authUrl = \`https://\${domain}/oauth/authorize/?client_id=${APP_ID}&response_type=code&scope=${APP_SCOPE}&redirect_uri=\${window.location.origin}/oauth/callback\`;
+            console.log('Redirecting to:', authUrl);
+            window.location.href = authUrl;
+        });
+        </script>
+    </body>
+    </html>
+    `;
+}
+
 // Start server
 app.listen(PORT, () => {
     console.log(`🚀 Bitrix24 WhatsApp Connector Installer running on port ${PORT}`);
-    console.log(`📍 Visit: http://localhost:${PORT} (or your Render URL)`);
+    console.log(`📍 Visit: https://bitrix-local.onrender.com`);
+    console.log(`📱 Install endpoint: https://bitrix-local.onrender.com/install.js`);
+    console.log(`💚 Health check: https://bitrix-local.onrender.com/health`);
 });
 
 module.exports = app;
