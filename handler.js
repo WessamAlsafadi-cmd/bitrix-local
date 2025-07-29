@@ -14,11 +14,15 @@ const config = {
     bitrix24Domain: process.env.BITRIX24_DOMAIN,
     accessToken: process.env.BITRIX24_ACCESS_TOKEN,
     port: process.env.PORT || 3000,
-    authDir: './whatsapp_auth', // This will create the folder automatically
+    authDir: './whatsapp_auth',
     connectorId: process.env.CONNECTOR_ID || 'custom_whatsapp'
 };
 
-
+// Add validation
+if (!config.bitrix24Domain || !config.accessToken) {
+    console.warn('⚠️ Missing required config: bitrix24Domain and accessToken');
+    console.warn('Handler will not start automatically - use install.js first');
+}
 
 class WhatsAppBitrix24Handler {
     constructor(config) {
@@ -33,7 +37,7 @@ class WhatsAppBitrix24Handler {
         
         this.sock = null;
         this.app = express();
-        this.chatSessions = new Map(); // WhatsApp ID -> Bitrix24 Chat ID mapping
+        this.chatSessions = new Map();
         
         this.setupExpress();
     }
@@ -46,8 +50,11 @@ class WhatsAppBitrix24Handler {
         
         this.sock = makeWASocket({
             auth: state,
-            printQRInTerminal: true,
-            logger: console,
+            // Remove deprecated printQRInTerminal option
+            logger: {
+                level: 'silent', // Fix logger.child error
+                child: () => ({ level: 'silent' })
+            },
             browser: ['Custom WhatsApp Bot', 'Desktop', '1.0.0']
         });
         
@@ -56,7 +63,12 @@ class WhatsAppBitrix24Handler {
         
         // Handle connection updates
         this.sock.ev.on('connection.update', (update) => {
-            const { connection, lastDisconnect } = update;
+            const { connection, lastDisconnect, qr } = update;
+            
+            if (qr) {
+                console.log('📱 QR Code received. Please scan with WhatsApp:');
+                console.log(qr);
+            }
             
             if (connection === 'close') {
                 const error = lastDisconnect?.error;
@@ -82,7 +94,7 @@ class WhatsAppBitrix24Handler {
             }
         });
         
-        console.log('WhatsApp client initialized. Please scan QR code if needed.');
+        console.log('WhatsApp client initialized.');
     }
     
     /**
@@ -190,7 +202,7 @@ class WhatsAppBitrix24Handler {
                     VALUE_TYPE: 'MOBILE'
                 }],
                 COMMENTS: `First message: ${firstMessage}`,
-                ASSIGNED_BY_ID: 1 // Assign to admin, change as needed
+                ASSIGNED_BY_ID: 1
             }
         };
         
@@ -232,7 +244,7 @@ class WhatsAppBitrix24Handler {
         
         // Start server
         this.app.listen(this.config.port, () => {
-            console.log(`Server running on port ${this.config.port}`);
+            console.log(`WhatsApp Handler server running on port ${this.config.port}`);
         });
     }
     
@@ -327,16 +339,18 @@ class WhatsAppBitrix24Handler {
      */
     async start() {
         console.log('Starting WhatsApp-Bitrix24 Handler...');
+        
+        // Validate config before starting
+        if (!this.config.bitrix24Domain || !this.config.accessToken) {
+            throw new Error('Missing required config: bitrix24Domain and accessToken. Run install.js first!');
+        }
+        
         await this.initWhatsApp();
         console.log('Handler started successfully!');
     }
 }
 
-// Usage example
-// Add this to the top of handler.js
-
-
-const handler = new WhatsAppBitrix24Handler(config);
-handler.start().catch(console.error);
+// REMOVED AUTO-EXECUTION - Only export the class
+// This prevents handler.js from running when install.js imports it
 
 module.exports = WhatsAppBitrix24Handler;
