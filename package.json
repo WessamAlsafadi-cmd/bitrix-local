@@ -1,0 +1,32 @@
+{
+  "name": "bitrix24-whatsapp-connector",
+  "version": "1.0.0",
+  "description": "Custom WhatsApp connector for Bitrix24 using Baileys.js",
+  "main": "handler.js",
+  "scripts": {
+    "start": "node whatsapp-handler.js",
+    "dev": "nodemon whatsapp-handler.js"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.7.18",
+    "axios": "^1.11.0",
+    "body-parser": "^1.20.3",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "winston": "^3.17.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  },
+  "keywords": [
+    "bitrix24",
+    "whatsapp",
+    "connector",
+    "baileys",
+    "crm",
+    "openlines"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}
