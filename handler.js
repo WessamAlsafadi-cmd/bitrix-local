@@ -210,4 +210,343 @@ class WhatsAppBitrix24Handler extends EventEmitter {
      */
     generateBitrixUserId(chatId) {
         // Remove @ and convert to a consistent format
-        return chatId.replace('@s.whatsapp
+        return chatId.replace('@s.whatsapp.net', '').replace('@c.us', '');
+    }
+    
+    /**
+     * Create or find contact in Bitrix24
+     */
+    async createOrFindBitrixContact(session) {
+        try {
+            const phoneNumber = session.chatId.replace('@s.whatsapp.net', '').replace('@c.us', '');
+            
+            // First, try to find existing contact by phone
+            const searchResult = await this.callBitrix24Method('crm.contact.list', {
+                filter: { 'PHONE': phoneNumber },
+                select: ['ID', 'NAME', 'LAST_NAME', 'PHONE']
+            });
+            
+            if (searchResult.result && searchResult.result.length > 0) {
+                const contact = searchResult.result[0];
+                session.bitrixContactId = contact.ID;
+                console.log(`✅ Found existing Bitrix24 contact: ${contact.NAME} ${contact.LAST_NAME} (ID: ${contact.ID})`);
+                return contact;
+            }
+            
+            // Create new contact if not found
+            const newContact = await this.callBitrix24Method('crm.contact.add', {
+                fields: {
+                    'NAME': session.senderName || 'WhatsApp Contact',
+                    'PHONE': [{ 'VALUE': phoneNumber, 'VALUE_TYPE': 'MOBILE' }],
+                    'SOURCE_ID': 'WEBFORM',
+                    'SOURCE_DESCRIPTION': 'WhatsApp Integration',
+                    'COMMENTS': `Created from WhatsApp chat: ${session.chatId}`
+                }
+            });
+            
+            if (newContact.result) {
+                session.bitrixContactId = newContact.result;
+                console.log(`✅ Created new Bitrix24 contact: ${session.senderName} (ID: ${newContact.result})`);
+                return newContact.result;
+            }
+            
+        } catch (error) {
+            console.error('❌ Error creating/finding Bitrix24 contact:', error);
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Send message data to Bitrix24
+     */
+    async sendToBitrix24(messageData) {
+        try {
+            console.log('📤 Sending message to Bitrix24:', messageData.messageId);
+            
+            // Method 1: Try to send via imconnector
+            try {
+                const result = await this.callBitrix24Method('imconnector.send.messages', {
+                    CONNECTOR: this.config.connectorId,
+                    CHAT_ID: messageData.chatId,
+                    MESSAGE: messageData.message,
+                    USER_ID: messageData.userId,
+                    DATE_CREATE: messageData.timestamp,
+                    EXTERNAL_MESSAGE_ID: messageData.messageId
+                });
+                
+                if (result.result) {
+                    console.log('✅ Message sent to Bitrix24 via imconnector');
+                    return result;
+                }
+            } catch (imError) {
+                console.log('⚠️ imconnector method failed, trying alternative:', imError.message);
+            }
+            
+            // Method 2: Try to create Open Line chat
+            try {
+                const chatResult = await this.callBitrix24Method('imopenlines.chat.add', {
+                    USER_CODE: messageData.userId,
+                    LINE_NAME: 'WhatsApp',
+                    USER_NAME: messageData.userName,
+                    MESSAGE: messageData.message
+                });
+                
+                if (chatResult.result) {
+                    console.log('✅ Message sent to Bitrix24 via Open Lines');
+                    return chatResult;
+                }
+            } catch (openLineError) {
+                console.log('⚠️ Open Lines method failed:', openLineError.message);
+            }
+            
+            // Method 3: Create a CRM activity/task as fallback
+            try {
+                const activityResult = await this.callBitrix24Method('crm.activity.add', {
+                    fields: {
+                        'OWNER_TYPE_ID': 3, // Contact
+                        'OWNER_ID': messageData.userId,
+                        'TYPE_ID': 4, // Call type
+                        'SUBJECT': 'WhatsApp Message',
+                        'DESCRIPTION': `WhatsApp message from ${messageData.userName}: ${messageData.message}`,
+                        'START_TIME': messageData.timestamp,
+                        'END_TIME': messageData.timestamp,
+                        'COMPLETED': 'N',
+                        'PRIORITY': 2,
+                        'RESPONSIBLE_ID': 1
+                    }
+                });
+                
+                if (activityResult.result) {
+                    console.log('✅ Message logged as CRM activity');
+                    return activityResult;
+                }
+            } catch (activityError) {
+                console.log('⚠️ CRM activity creation failed:', activityError.message);
+            }
+            
+            throw new Error('All Bitrix24 integration methods failed');
+            
+        } catch (error) {
+            console.error('❌ Failed to send to Bitrix24:', error);
+            
+            // Queue the message for retry
+            this.messageQueue.push({
+                messageData,
+                retryCount: 0,
+                timestamp: Date.now()
+            });
+            
+            this.processMessageQueue();
+        }
+    }
+    
+    /**
+     * Process queued messages for retry
+     */
+    async processMessageQueue() {
+        if (this.isProcessingQueue || this.messageQueue.length === 0) {
+            return;
+        }
+        
+        this.isProcessingQueue = true;
+        console.log(`📋 Processing message queue (${this.messageQueue.length} messages)`);
+        
+        while (this.messageQueue.length > 0) {
+            const queueItem = this.messageQueue.shift();
+            
+            if (queueItem.retryCount >= 3) {
+                console.log('⚠️ Message retry limit reached, discarding:', queueItem.messageData.messageId);
+                continue;
+            }
+            
+            try {
+                await this.sendToBitrix24(queueItem.messageData);
+                console.log('✅ Queued message processed successfully');
+            } catch (error) {
+                queueItem.retryCount++;
+                if (queueItem.retryCount < 3) {
+                    this.messageQueue.push(queueItem);
+                    console.log(`⚠️ Message queued for retry (attempt ${queueItem.retryCount + 1})`);
+                }
+            }
+            
+            // Wait between retries
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+        this.isProcessingQueue = false;
+    }
+    
+    /**
+     * Process auto-reply logic
+     */
+    async processAutoReply(chatId, messageText, session) {
+        try {
+            // Simple auto-reply logic - can be customized
+            const lowerMessage = messageText.toLowerCase();
+            
+            // Welcome message for new sessions
+            if (session.messageCount === 0) {
+                await this.sendWhatsAppMessage(chatId, 
+                    "👋 Hello! Thank you for contacting us via WhatsApp. Your message has been received and we'll get back to you soon!");
+                session.messageCount++;
+                return;
+            }
+            
+            // Keyword-based responses
+            if (lowerMessage.includes('hello') || lowerMessage.includes('hi')) {
+                await this.sendWhatsAppMessage(chatId, 
+                    "Hello! How can we assist you today?");
+            } else if (lowerMessage.includes('help')) {
+                await this.sendWhatsAppMessage(chatId, 
+                    "We're here to help! Your message has been forwarded to our team. Someone will respond shortly.");
+            }
+            
+            session.messageCount++;
+            session.lastActivity = new Date();
+            
+        } catch (error) {
+            console.error('❌ Error processing auto-reply:', error);
+        }
+    }
+    
+    /**
+     * Send WhatsApp message
+     */
+    async sendWhatsAppMessage(chatId, message) {
+        try {
+            if (!this.sock) {
+                throw new Error('WhatsApp socket not initialized');
+            }
+            
+            await this.sock.sendMessage(chatId, { text: message });
+            console.log(`📱 Sent WhatsApp message to ${chatId}: ${message.substring(0, 50)}...`);
+            
+        } catch (error) {
+            console.error('❌ Error sending WhatsApp message:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * Send WhatsApp message from Bitrix24 (for outgoing messages)
+     */
+    async sendOutgoingMessage(chatId, message, files = []) {
+        try {
+            if (!this.sock) {
+                throw new Error('WhatsApp socket not initialized');
+            }
+            
+            // Send text message
+            if (message) {
+                await this.sock.sendMessage(chatId, { text: message });
+            }
+            
+            // Send files if any
+            for (const file of files) {
+                if (file.type === 'image') {
+                    await this.sock.sendMessage(chatId, {
+                        image: { url: file.url },
+                        caption: file.caption || ''
+                    });
+                } else if (file.type === 'document') {
+                    await this.sock.sendMessage(chatId, {
+                        document: { url: file.url },
+                        fileName: file.name || 'document'
+                    });
+                }
+            }
+            
+            console.log(`📤 Sent outgoing message to ${chatId}`);
+            return true;
+            
+        } catch (error) {
+            console.error('❌ Error sending outgoing message:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * Call Bitrix24 REST API method
+     */
+    async callBitrix24Method(method, params = {}) {
+        const url = `https://${this.config.bitrix24Domain}/rest/${this.config.accessToken}/${method}.json`;
+        
+        try {
+            const response = await axios.post(url, new URLSearchParams(params), {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                timeout: 10000
+            });
+            
+            if (response.data.error) {
+                throw new Error(`Bitrix24 API error: ${response.data.error_description || response.data.error}`);
+            }
+            
+            return response.data;
+            
+        } catch (error) {
+            console.error(`❌ Bitrix24 API call failed (${method}):`, error.message);
+            throw error;
+        }
+    }
+    
+    /**
+     * Get connection status
+     */
+    getConnectionStatus() {
+        return {
+            whatsappConnected: this.sock && this.sock.user,
+            bitrix24Domain: this.config.bitrix24Domain,
+            activeSessions: this.chatSessions.size,
+            queuedMessages: this.messageQueue.length,
+            uptime: process.uptime()
+        };
+    }
+    
+    /**
+     * Disconnect WhatsApp
+     */
+    async disconnect() {
+        try {
+            if (this.sock) {
+                await this.sock.logout();
+                this.sock = null;
+            }
+            
+            this.chatSessions.clear();
+            this.messageQueue = [];
+            
+            console.log('📴 WhatsApp disconnected');
+            this.emit('status', 'Disconnected');
+            
+        } catch (error) {
+            console.error('❌ Error disconnecting WhatsApp:', error);
+        }
+    }
+    
+    /**
+     * Clean up resources
+     */
+    async cleanup() {
+        console.log('🧹 Cleaning up WhatsApp handler...');
+        
+        // Process remaining queued messages
+        if (this.messageQueue.length > 0) {
+            console.log(`📋 Processing ${this.messageQueue.length} remaining messages...`);
+            await this.processMessageQueue();
+        }
+        
+        // Disconnect WhatsApp
+        await this.disconnect();
+        
+        // Clear all sessions
+        this.chatSessions.clear();
+        
+        console.log('✅ Cleanup completed');
+    }
+}
+
+module.exports = WhatsAppBitrix24Handler;
