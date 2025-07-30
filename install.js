@@ -96,8 +96,60 @@ app.get('/health', (req, res) => {
         status: 'ok', 
         timestamp: new Date().toISOString(),
         port: PORT,
-        baseUrl: BASE_URL
+        baseUrl: BASE_URL,
+        appId: APP_ID,
+        hasAppSecret: !!APP_SECRET
     });
+});
+
+// Debug endpoint
+app.get('/debug', (req, res) => {
+    console.log('🐛 Debug endpoint accessed');
+    console.log('📋 Query params:', req.query);
+    console.log('📋 Headers:', req.headers);
+    
+    res.json({
+        message: 'Debug endpoint working',
+        timestamp: new Date().toISOString(),
+        query: req.query,
+        headers: req.headers,
+        env: {
+            PORT: process.env.PORT,
+            BASE_URL: process.env.BASE_URL,
+            APP_ID: process.env.APP_ID,
+            HAS_APP_SECRET: !!process.env.APP_SECRET,
+            BITRIX24_DOMAIN: process.env.BITRIX24_DOMAIN,
+            HAS_ACCESS_TOKEN: !!process.env.BITRIX24_ACCESS_TOKEN
+        }
+    });
+});
+
+// Test Bitrix24 connection
+app.get('/test-bitrix', async (req, res) => {
+    const { domain, token } = req.query;
+    
+    if (!domain || !token) {
+        return res.status(400).json({
+            error: 'Missing domain or token parameters',
+            usage: `${BASE_URL}/test-bitrix?domain=YOUR_DOMAIN&token=YOUR_TOKEN`
+        });
+    }
+    
+    try {
+        const customApp = new CustomChannelApp(domain, token);
+        const result = await customApp.callBitrix24Method('app.info');
+        
+        res.json({
+            success: true,
+            message: 'Bitrix24 connection successful',
+            appInfo: result
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
 });
 
 // Main application interface for Bitrix24
@@ -118,30 +170,98 @@ app.get('/install.js', (req, res) => {
     console.log('📦 Installation script requested');
     console.log('📋 Query params:', req.query);
     
-    const { DOMAIN, PROTOCOL = 'https' } = req.query;
+    const { DOMAIN, PROTOCOL = 'https', AUTH_ID, AUTH_EXPIRES, REFRESH_ID } = req.query;
     
     if (!DOMAIN) {
-        return res.status(400).send('Missing DOMAIN parameter');
+        console.error('❌ Missing DOMAIN parameter');
+        return res.status(400).send(`
+            <h2>Installation Error</h2>
+            <p>Missing DOMAIN parameter. This should be called from Bitrix24.</p>
+            <p>Expected URL format: ${BASE_URL}/install.js?DOMAIN=your-bitrix24-domain.bitrix24.com</p>
+        `);
     }
     
-    const installUrl = `${PROTOCOL}://${DOMAIN}/marketplace/install/?client_id=${APP_ID}`;
+    console.log(`✅ Installation requested for domain: ${DOMAIN}`);
+    
+    // If we already have auth parameters, proceed directly
+    if (AUTH_ID) {
+        console.log('✅ Auth parameters present, proceeding with installation');
+        return res.send(getDirectInstallHTML(DOMAIN, AUTH_ID, AUTH_EXPIRES, REFRESH_ID));
+    }
+    
+    // Otherwise, redirect to OAuth flow
+    const authUrl = `${PROTOCOL}://${DOMAIN}/oauth/authorize/?` + querystring.stringify({
+        client_id: APP_ID,
+        response_type: 'code',
+        scope: APP_SCOPE,
+        redirect_uri: `${BASE_URL}/oauth/callback`,
+        state: DOMAIN
+    });
     
     res.send(`
         <!DOCTYPE html>
         <html>
         <head>
             <title>Install WhatsApp Connector</title>
-            <script src="//api.bitrix24.com/api/v1/"></script>
+            <meta charset="UTF-8">
+            <style>
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    min-height: 100vh;
+                    margin: 0;
+                    background: #f5f5f5;
+                }
+                .container {
+                    text-align: center;
+                    padding: 40px;
+                    background: white;
+                    border-radius: 12px;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                }
+                .spinner {
+                    display: inline-block;
+                    width: 40px;
+                    height: 40px;
+                    border: 4px solid #f3f3f3;
+                    border-top: 4px solid #25D366;
+                    border-radius: 50%;
+                    animation: spin 1s linear infinite;
+                    margin-bottom: 20px;
+                }
+                @keyframes spin {
+                    0% { transform: rotate(0deg); }
+                    100% { transform: rotate(360deg); }
+                }
+                .button {
+                    background: #25D366;
+                    color: white;
+                    border: none;
+                    padding: 12px 24px;
+                    border-radius: 6px;
+                    cursor: pointer;
+                    font-size: 16px;
+                    text-decoration: none;
+                    display: inline-block;
+                    margin-top: 20px;
+                }
+            </style>
         </head>
         <body>
+            <div class="container">
+                <div class="spinner"></div>
+                <h2>Installing WhatsApp Connector</h2>
+                <p>Domain: <strong>${DOMAIN}</strong></p>
+                <p>Redirecting to authorization...</p>
+                <a href="${authUrl}" class="button">Continue Installation</a>
+            </div>
             <script>
-                BX24.init(function(){
-                    BX24.install(function(result){
-                        if(result.status === 'installed') {
-                            window.location.href = '${BASE_URL}/oauth/callback?code=' + result.code + '&domain=' + '${DOMAIN}';
-                        }
-                    });
-                });
+                // Auto-redirect after 2 seconds
+                setTimeout(function() {
+                    window.location.href = '${authUrl}';
+                }, 2000);
             </script>
         </body>
         </html>
@@ -152,26 +272,59 @@ app.get('/install.js', (req, res) => {
 app.post('/install.js', async (req, res) => {
     console.log('📦 POST Installation requested');
     console.log('📋 Body:', req.body);
+    console.log('📋 Headers:', req.headers);
     
     try {
-        const { DOMAIN, AUTH_ID, AUTH_EXPIRES, REFRESH_ID } = req.body;
+        const { DOMAIN, AUTH_ID, AUTH_EXPIRES, REFRESH_ID, code, access_token } = req.body;
         
-        if (!DOMAIN || !AUTH_ID) {
-            return res.status(400).json({ error: 'Missing required parameters' });
+        if (!DOMAIN) {
+            console.error('❌ Missing DOMAIN in POST request');
+            return res.status(400).json({ 
+                error: 'Missing DOMAIN parameter',
+                received: Object.keys(req.body)
+            });
         }
         
-        // Here you would typically save the installation data
         console.log('✅ Installation data received for domain:', DOMAIN);
         
-        res.json({ 
-            success: true, 
-            message: 'Installation completed successfully',
-            domain: DOMAIN
-        });
+        // If we have an access token directly, use it
+        let finalAccessToken = access_token;
+        
+        // If we have AUTH_ID, construct the access token
+        if (AUTH_ID && !finalAccessToken) {
+            finalAccessToken = AUTH_ID;
+        }
+        
+        if (finalAccessToken) {
+            console.log('🔑 Access token available, proceeding with installation');
+            
+            // Initialize the custom channel app
+            const customApp = new CustomChannelApp(DOMAIN, finalAccessToken);
+            const installResult = await customApp.install();
+            
+            console.log('✅ Installation completed successfully');
+            
+            res.json({ 
+                success: true, 
+                message: 'Installation completed successfully',
+                domain: DOMAIN,
+                result: installResult
+            });
+        } else {
+            console.log('⚠️ No access token available, returning success for now');
+            res.json({ 
+                success: true, 
+                message: 'Installation received, awaiting authorization',
+                domain: DOMAIN
+            });
+        }
         
     } catch (error) {
         console.error('❌ Installation error:', error);
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ 
+            error: error.message,
+            details: error.stack
+        });
     }
 });
 
@@ -181,50 +334,248 @@ app.get('/oauth/callback', async (req, res) => {
     console.log('📋 Query params:', req.query);
     
     try {
-        const { code, domain, state } = req.query;
+        const { code, domain, state, error, error_description } = req.query;
         
-        if (!code || !domain) {
-            throw new Error('Missing code or domain parameter');
+        // Handle OAuth errors
+        if (error) {
+            console.error('❌ OAuth error:', error, error_description);
+            return res.status(400).send(`
+                <h2>Authorization Error</h2>
+                <p>Error: ${error}</p>
+                <p>Description: ${error_description || 'Unknown error'}</p>
+                <p><a href="${BASE_URL}">Try again</a></p>
+            `);
         }
         
+        if (!code) {
+            throw new Error('Missing authorization code');
+        }
+        
+        // Use domain from state parameter or query parameter
+        const targetDomain = state || domain;
+        
+        if (!targetDomain) {
+            throw new Error('Missing domain parameter');
+        }
+        
+        console.log(`🔄 Exchanging code for access token for domain: ${targetDomain}`);
+        
         // Exchange code for access token
-        const tokenResponse = await axios.post(`https://${domain}/oauth/token/`, querystring.stringify({
+        const tokenData = {
             grant_type: 'authorization_code',
             client_id: APP_ID,
             client_secret: APP_SECRET,
             code: code,
             redirect_uri: `${BASE_URL}/oauth/callback`
-        }), {
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            }
-        });
+        };
         
-        const { access_token, refresh_token } = tokenResponse.data;
+        console.log('📡 Token exchange request:', tokenData);
+        
+        const tokenResponse = await axios.post(
+            `https://${targetDomain}/oauth/token/`, 
+            querystring.stringify(tokenData),
+            {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                timeout: 15000
+            }
+        );
+        
+        console.log('✅ Token response:', tokenResponse.data);
+        
+        const { access_token, refresh_token, expires_in } = tokenResponse.data;
         
         if (!access_token) {
             throw new Error('Failed to obtain access token');
         }
         
-        console.log('✅ Access token obtained for domain:', domain);
+        console.log('✅ Access token obtained for domain:', targetDomain);
         
         // Initialize the custom channel app
-        const customApp = new CustomChannelApp(domain, access_token);
+        const customApp = new CustomChannelApp(targetDomain, access_token);
         const installResult = await customApp.install();
         
-        res.send(getInstallResultHTML(installResult, access_token, domain));
+        console.log('🎉 Installation completed successfully!');
+        
+        res.send(getInstallResultHTML(installResult, access_token, targetDomain));
         
     } catch (error) {
         console.error('❌ OAuth callback error:', error);
+        
+        let errorMessage = error.message;
+        if (error.response && error.response.data) {
+            errorMessage += ` - ${JSON.stringify(error.response.data)}`;
+        }
+        
         res.status(500).send(`
-            <h2>Installation Error</h2>
-            <p>Error: ${error.message}</p>
-            <p>Please try the installation again.</p>
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Installation Error</title>
+                <style>
+                    body {
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                        padding: 40px;
+                        background: #f8f9fa;
+                    }
+                    .container {
+                        max-width: 600px;
+                        margin: 0 auto;
+                        background: white;
+                        padding: 30px;
+                        border-radius: 8px;
+                        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                    }
+                    .error {
+                        color: #dc3545;
+                        background: #f8d7da;
+                        padding: 15px;
+                        border-radius: 6px;
+                        margin: 20px 0;
+                    }
+                    .button {
+                        background: #007bff;
+                        color: white;
+                        border: none;
+                        padding: 12px 24px;
+                        border-radius: 6px;
+                        cursor: pointer;
+                        text-decoration: none;
+                        display: inline-block;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h2>❌ Installation Error</h2>
+                    <div class="error">
+                        <strong>Error:</strong> ${errorMessage}
+                    </div>
+                    <p>Please check the following:</p>
+                    <ul>
+                        <li>Your APP_ID and APP_SECRET are correctly set in environment variables</li>
+                        <li>The redirect URI is properly configured in your Bitrix24 app</li>
+                        <li>Your Bitrix24 domain is accessible</li>
+                    </ul>
+                    <a href="${BASE_URL}" class="button">Try Again</a>
+                </div>
+            </body>
+            </html>
         `);
     }
 });
 
 // --- HTML Templates ---
+
+function getDirectInstallHTML(domain, authId, authExpires, refreshId) {
+    return `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Installing WhatsApp Connector</title>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                margin: 0;
+                padding: 20px;
+                background: #f8f9fa;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 100vh;
+            }
+            .container {
+                background: white;
+                border-radius: 12px;
+                padding: 40px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                text-align: center;
+                max-width: 500px;
+            }
+            .spinner {
+                display: inline-block;
+                width: 40px;
+                height: 40px;
+                border: 4px solid #f3f3f3;
+                border-top: 4px solid #25D366;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+                margin-bottom: 20px;
+            }
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            .status {
+                margin: 20px 0;
+                padding: 15px;
+                border-radius: 6px;
+                font-weight: 500;
+            }
+            .status.success { background: #d4edda; color: #155724; }
+            .status.error { background: #f8d7da; color: #721c24; }
+            .status.loading { background: #fff3cd; color: #856404; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="spinner"></div>
+            <h2>Installing WhatsApp Connector</h2>
+            <p>Domain: <strong>${domain}</strong></p>
+            <div id="status" class="status loading">Initializing installation...</div>
+        </div>
+
+        <script>
+            async function performInstallation() {
+                const statusEl = document.getElementById('status');
+                
+                try {
+                    statusEl.textContent = 'Installing connector...';
+                    statusEl.className = 'status loading';
+                    
+                    const response = await fetch('${BASE_URL}/install.js', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            DOMAIN: '${domain}',
+                            AUTH_ID: '${authId}',
+                            AUTH_EXPIRES: '${authExpires}',
+                            REFRESH_ID: '${refreshId}'
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        statusEl.textContent = '✅ Installation completed successfully!';
+                        statusEl.className = 'status success';
+                        
+                        setTimeout(() => {
+                            window.close();
+                        }, 2000);
+                    } else {
+                        throw new Error(result.error || 'Installation failed');
+                    }
+                    
+                } catch (error) {
+                    console.error('Installation error:', error);
+                    statusEl.textContent = '❌ Installation failed: ' + error.message;
+                    statusEl.className = 'status error';
+                }
+            }
+            
+            // Start installation automatically
+            performInstallation();
+        </script>
+    </body>
+    </html>
+    `;
+}
 
 function getAppWidgetHTML() {
     return `
