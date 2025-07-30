@@ -1,6 +1,6 @@
 /**
- * WhatsApp to Bitrix24 Message Handler (Fixed Version)
- * Using Baileys.js for WhatsApp connection with proper Bitrix24 integration
+ * WhatsApp to Bitrix24 Message Handler (Open Lines Version)
+ * Using Baileys.js for WhatsApp connection with proper Bitrix24 Open Lines integration
  */
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
@@ -12,8 +12,7 @@ const config = {
     bitrix24Domain: process.env.BITRIX24_DOMAIN,
     accessToken: process.env.BITRIX24_ACCESS_TOKEN,
     port: process.env.PORT || 3000,
-    authDir: './whatsapp_auth',
-    connectorId: process.env.CONNECTOR_ID || 'custom_whatsapp'
+    authDir: './whatsapp_auth'
 };
 
 if (!config.bitrix24Domain || !config.accessToken) {
@@ -26,7 +25,6 @@ class WhatsAppBitrix24Handler extends EventEmitter {
         this.config = {
             bitrix24Domain: config.bitrix24Domain,
             accessToken: config.accessToken,
-            connectorId: 'custom_whatsapp',
             port: config.port || 3000,
             authDir: config.authDir || './auth_info_baileys',
             ...config
@@ -71,7 +69,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                     this.emit('status', 'Connection Closed. Reconnecting...');
                     
                     if (shouldReconnect) {
-                        setTimeout(() => this.initWhatsApp(), 5000); // Retry after 5 seconds
+                        setTimeout(() => this.initWhatsApp(), 5000);
                     } else {
                         this.emit('status', 'Logged Out. Please scan QR again.');
                     }
@@ -127,8 +125,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                 message: messageText,
                 userId: session.bitrixUserId,
                 userName: senderName,
-                timestamp: new Date(timestamp * 1000).toISOString(),
-                connector: this.config.connectorId
+                timestamp: new Date(timestamp * 1000).toISOString()
             };
             
             // Send to Bitrix24
@@ -199,9 +196,6 @@ class WhatsAppBitrix24Handler extends EventEmitter {
         this.chatSessions.set(chatId, session);
         console.log(`📝 Created new chat session for: ${senderName} (${chatId})`);
         
-        // Try to create/find contact in Bitrix24
-        await this.createOrFindBitrixContact(session);
-        
         return session;
     }
     
@@ -214,76 +208,39 @@ class WhatsAppBitrix24Handler extends EventEmitter {
     }
     
     /**
-     * Create or find contact in Bitrix24
-     */
-    async createOrFindBitrixContact(session) {
-        try {
-            const phoneNumber = session.chatId.replace('@s.whatsapp.net', '').replace('@c.us', '');
-            
-            // First, try to find existing contact by phone
-            const searchResult = await this.callBitrix24Method('crm.contact.list', {
-                filter: { 'PHONE': phoneNumber },
-                select: ['ID', 'NAME', 'LAST_NAME', 'PHONE']
-            });
-            
-            if (searchResult.result && searchResult.result.length > 0) {
-                const contact = searchResult.result[0];
-                session.bitrixContactId = contact.ID;
-                console.log(`✅ Found existing Bitrix24 contact: ${contact.NAME} ${contact.LAST_NAME} (ID: ${contact.ID})`);
-                return contact;
-            }
-            
-            // Create new contact if not found
-            const newContact = await this.callBitrix24Method('crm.contact.add', {
-                fields: {
-                    'NAME': session.senderName || 'WhatsApp Contact',
-                    'PHONE': [{ 'VALUE': phoneNumber, 'VALUE_TYPE': 'MOBILE' }],
-                    'SOURCE_ID': 'WEBFORM',
-                    'SOURCE_DESCRIPTION': 'WhatsApp Integration',
-                    'COMMENTS': `Created from WhatsApp chat: ${session.chatId}`
-                }
-            });
-            
-            if (newContact.result) {
-                session.bitrixContactId = newContact.result;
-                console.log(`✅ Created new Bitrix24 contact: ${session.senderName} (ID: ${newContact.result})`);
-                return newContact.result;
-            }
-            
-        } catch (error) {
-            console.error('❌ Error creating/finding Bitrix24 contact:', error);
-        }
-        
-        return null;
-    }
-    
-    /**
-     * Send message data to Bitrix24
+     * Send message data to Bitrix24 using Open Lines approach
      */
     async sendToBitrix24(messageData) {
         try {
-            console.log('📤 Sending message to Bitrix24:', messageData.messageId);
+            console.log('📤 Sending message to Bitrix24 via Open Lines:', messageData.messageId);
             
-            // Method 1: Try to send via imconnector
+            // Method 1: Try Open Lines network join + message
             try {
-                const result = await this.callBitrix24Method('imconnector.send.messages', {
-                    CONNECTOR: this.config.connectorId,
-                    CHAT_ID: messageData.chatId,
-                    MESSAGE: messageData.message,
-                    USER_ID: messageData.userId,
-                    DATE_CREATE: messageData.timestamp,
-                    EXTERNAL_MESSAGE_ID: messageData.messageId
+                // First, join the user to the network
+                const joinResult = await this.callBitrix24Method('imopenlines.network.join', {
+                    CODE: messageData.userId
                 });
                 
-                if (result.result) {
-                    console.log('✅ Message sent to Bitrix24 via imconnector');
-                    return result;
+                if (joinResult.result) {
+                    console.log('✅ User joined Open Lines network');
                 }
-            } catch (imError) {
-                console.log('⚠️ imconnector method failed, trying alternative:', imError.message);
+                
+                // Then send the message
+                const messageResult = await this.callBitrix24Method('imopenlines.network.message.add', {
+                    USER_CODE: messageData.userId,
+                    MESSAGE: messageData.message,
+                    SYSTEM: 'N'
+                });
+                
+                if (messageResult.result) {
+                    console.log('✅ Message sent to Bitrix24 via Open Lines network');
+                    return messageResult;
+                }
+            } catch (networkError) {
+                console.log('⚠️ Open Lines network method failed, trying chat.add:', networkError.message);
             }
             
-            // Method 2: Try to create Open Line chat
+            // Method 2: Try imopenlines.chat.add
             try {
                 const chatResult = await this.callBitrix24Method('imopenlines.chat.add', {
                     USER_CODE: messageData.userId,
@@ -293,22 +250,25 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                 });
                 
                 if (chatResult.result) {
-                    console.log('✅ Message sent to Bitrix24 via Open Lines');
+                    console.log('✅ Message sent to Bitrix24 via Open Lines chat.add');
                     return chatResult;
                 }
-            } catch (openLineError) {
-                console.log('⚠️ Open Lines method failed:', openLineError.message);
+            } catch (chatError) {
+                console.log('⚠️ Open Lines chat.add failed:', chatError.message);
             }
             
-            // Method 3: Create a CRM activity/task as fallback
+            // Method 3: Create a CRM activity as fallback
             try {
+                // First try to find or create a contact
+                let contactId = await this.findOrCreateContact(messageData.userId, messageData.userName);
+                
                 const activityResult = await this.callBitrix24Method('crm.activity.add', {
                     fields: {
                         'OWNER_TYPE_ID': 3, // Contact
-                        'OWNER_ID': messageData.userId,
+                        'OWNER_ID': contactId || 1,
                         'TYPE_ID': 4, // Call type
                         'SUBJECT': 'WhatsApp Message',
-                        'DESCRIPTION': `WhatsApp message from ${messageData.userName}: ${messageData.message}`,
+                        'DESCRIPTION': `WhatsApp message from ${messageData.userName} (${messageData.userId}):\n\n${messageData.message}`,
                         'START_TIME': messageData.timestamp,
                         'END_TIME': messageData.timestamp,
                         'COMPLETED': 'N',
@@ -338,6 +298,49 @@ class WhatsAppBitrix24Handler extends EventEmitter {
             });
             
             this.processMessageQueue();
+        }
+    }
+    
+    /**
+     * Find or create contact in Bitrix24
+     */
+    async findOrCreateContact(whatsappUserId, userName) {
+        try {
+            const phoneNumber = whatsappUserId.replace('@s.whatsapp.net', '').replace('@c.us', '');
+            
+            // First, try to find existing contact by phone
+            const searchResult = await this.callBitrix24Method('crm.contact.list', {
+                filter: { 'PHONE': phoneNumber },
+                select: ['ID', 'NAME', 'LAST_NAME']
+            });
+            
+            if (searchResult.result && searchResult.result.length > 0) {
+                const contact = searchResult.result[0];
+                console.log(`✅ Found existing contact: ${contact.NAME} (ID: ${contact.ID})`);
+                return contact.ID;
+            }
+            
+            // Create new contact if not found
+            const newContact = await this.callBitrix24Method('crm.contact.add', {
+                fields: {
+                    'NAME': userName || 'WhatsApp Contact',
+                    'PHONE': [{ 'VALUE': phoneNumber, 'VALUE_TYPE': 'MOBILE' }],
+                    'SOURCE_ID': 'WEBFORM',
+                    'SOURCE_DESCRIPTION': 'WhatsApp Integration',
+                    'COMMENTS': `Created from WhatsApp: ${whatsappUserId}`
+                }
+            });
+            
+            if (newContact.result) {
+                console.log(`✅ Created new contact: ${userName} (ID: ${newContact.result})`);
+                return newContact.result;
+            }
+            
+            return null;
+            
+        } catch (error) {
+            console.error('❌ Error finding/creating contact:', error);
+            return null;
         }
     }
     
