@@ -102,6 +102,58 @@ app.get('/health', (req, res) => {
     });
 });
 
+// Test what API methods are available
+app.get('/test-api', async (req, res) => {
+    const { domain, token } = req.query;
+    
+    if (!domain || !token) {
+        return res.status(400).json({
+            error: 'Missing domain or token parameters',
+            usage: `${BASE_URL}/test-api?domain=YOUR_DOMAIN&token=YOUR_TOKEN`
+        });
+    }
+    
+    try {
+        const customApp = new CustomChannelApp(domain, token);
+        
+        // Test basic connectivity
+        const appInfo = await customApp.callBitrix24Method('app.info');
+        
+        // Get available methods
+        let availableMethods = {};
+        try {
+            const methods = await customApp.callBitrix24Method('methods');
+            availableMethods = methods.result || {};
+        } catch (methodsError) {
+            console.log('Could not get methods list:', methodsError.message);
+        }
+        
+        // Filter relevant methods
+        const relevantMethods = {
+            imconnector: Object.keys(availableMethods).filter(m => m.startsWith('imconnector')),
+            placement: Object.keys(availableMethods).filter(m => m.startsWith('placement')),
+            event: Object.keys(availableMethods).filter(m => m.startsWith('event')),
+            crm: Object.keys(availableMethods).filter(m => m.startsWith('crm')),
+            app: Object.keys(availableMethods).filter(m => m.startsWith('app'))
+        };
+        
+        res.json({
+            success: true,
+            domain: domain,
+            appInfo: appInfo,
+            availableMethods: relevantMethods,
+            totalMethods: Object.keys(availableMethods).length
+        });
+        
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            domain: domain
+        });
+    }
+});
+
 // Debug endpoint
 app.get('/debug', (req, res) => {
     console.log('🐛 Debug endpoint accessed');
