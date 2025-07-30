@@ -10,7 +10,6 @@ const CustomChannelApp = require('./lib/customChannelApp.js');
 require('dotenv').config();
 
 const WhatsAppBitrix24Handler = require('./handler.js');
-const CustomChannelApp = require('./lib/customChannelApp'); // We will create this file next
 
 const app = express();
 const server = http.createServer(app);
