@@ -6,6 +6,7 @@ const http = require('http');
 const { Server } = require("socket.io");
 const axios = require('axios');
 const querystring = require('querystring');
+const CustomChannelApp = require('./lib/customChannelApp.js');
 require('dotenv').config();
 
 const WhatsAppBitrix24Handler = require('./handler.js');
