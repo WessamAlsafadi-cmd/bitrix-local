@@ -383,11 +383,65 @@ function getInstallationHTML(req) {
     `;
 }
 
+// Add missing /handler.js route
+app.get('/handler.js', (req, res) => {
+    console.log('📱 /handler.js route accessed');
+    console.log('Query params:', req.query);
+    
+    const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>WhatsApp Connector Handler</title>
+        <style>
+            body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+            .success { background: #d4edda; padding: 15px; border-left: 4px solid #28a745; margin-bottom: 20px; }
+            .info { background: #f0f8ff; padding: 15px; border-left: 4px solid #007bff; margin-bottom: 20px; }
+        </style>
+    </head>
+    <body>
+        <h1>WhatsApp Connector Handler</h1>
+        
+        <div class="success">
+            <h2>✅ Handler Active</h2>
+            <p>Your WhatsApp connector handler is running and ready to process messages.</p>
+        </div>
+        
+        <div class="info">
+            <h3>Status:</h3>
+            <ul>
+                <li><strong>Service:</strong> Active</li>
+                <li><strong>Time:</strong> ${new Date().toISOString()}</li>
+                <li><strong>Connector ID:</strong> custom_whatsapp</li>
+            </ul>
+        </div>
+        
+        <p>This handler will process incoming messages from Bitrix24 and send them to WhatsApp.</p>
+    </body>
+    </html>
+    `;
+    
+    res.send(html);
+});
+
+app.post('/handler.js', (req, res) => {
+    console.log('📱 POST /handler.js route accessed');
+    console.log('Body params:', req.body);
+    
+    // Handle Bitrix24 requests here
+    res.json({
+        success: true,
+        message: 'Handler received request',
+        timestamp: new Date().toISOString()
+    });
+});
+
 // Start server
 app.listen(PORT, () => {
     console.log(`🚀 Bitrix24 WhatsApp Connector Installer running on port ${PORT}`);
     console.log(`📍 Visit: https://bitrix-local.onrender.com`);
     console.log(`📱 Install endpoint: https://bitrix-local.onrender.com/install.js`);
+    console.log(`🎮 Handler endpoint: https://bitrix-local.onrender.com/handler.js`);
     console.log(`💚 Health check: https://bitrix-local.onrender.com/health`);
 });
 
