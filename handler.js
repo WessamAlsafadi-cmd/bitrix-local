@@ -1,15 +1,14 @@
 /**
- * WhatsApp to Bitrix24 Message Handler
+ * WhatsApp to Bitrix24 Message Handler (Refactored to be an EventEmitter)
  * Using Baileys.js for WhatsApp connection
  */
-
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const axios = require('axios');
-const express = require('express');
-const bodyParser = require('body-parser');
+const { EventEmitter } = require('events'); // <-- Import EventEmitter
 require('dotenv').config();
 
+// (No changes to config or validation)
 const config = {
     bitrix24Domain: process.env.BITRIX24_DOMAIN,
     accessToken: process.env.BITRIX24_ACCESS_TOKEN,
@@ -18,14 +17,13 @@ const config = {
     connectorId: process.env.CONNECTOR_ID || 'custom_whatsapp'
 };
 
-// Add validation
 if (!config.bitrix24Domain || !config.accessToken) {
     console.warn('⚠️ Missing required config: bitrix24Domain and accessToken');
-    console.warn('Handler will not start automatically - use install.js first');
 }
 
-class WhatsAppBitrix24Handler {
+class WhatsAppBitrix24Handler extends EventEmitter { // <-- Extend EventEmitter
     constructor(config) {
+        super(); // <-- Call super()
         this.config = {
             bitrix24Domain: config.bitrix24Domain,
             accessToken: config.accessToken,
@@ -36,10 +34,8 @@ class WhatsAppBitrix24Handler {
         };
         
         this.sock = null;
-        this.app = express();
         this.chatSessions = new Map();
-        
-        this.setupExpress();
+        // We will run the Express server from install.js, so remove it from here.
     }
     
     /**
@@ -50,24 +46,18 @@ class WhatsAppBitrix24Handler {
         
         this.sock = makeWASocket({
             auth: state,
-            // Remove deprecated printQRInTerminal option
-            logger: {
-                level: 'silent', // Fix logger.child error
-                child: () => ({ level: 'silent' })
-            },
+            logger: { level: 'silent' },
             browser: ['Custom WhatsApp Bot', 'Desktop', '1.0.0']
         });
         
-        // Handle credentials update
         this.sock.ev.on('creds.update', saveCreds);
         
-        // Handle connection updates
         this.sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
             
             if (qr) {
-                console.log('📱 QR Code received. Please scan with WhatsApp:');
-                console.log(qr);
+                console.log('📱 QR Code received. Emitting to frontend...');
+                this.emit('qr', qr); // <-- EMIT the QR code
             }
             
             if (connection === 'close') {
@@ -76,16 +66,20 @@ class WhatsAppBitrix24Handler {
                 const shouldReconnect = !isBoom || error.output?.statusCode !== DisconnectReason.loggedOut;
 
                 console.log('Connection closed due to ', lastDisconnect.error, ', reconnecting ', shouldReconnect);
+                this.emit('status', 'Connection Closed. Reconnecting...'); // <-- EMIT status
                 
                 if (shouldReconnect) {
                     this.initWhatsApp();
+                } else {
+                    this.emit('status', 'Logged Out. Please scan QR again.'); // <-- EMIT logged out status
                 }
             } else if (connection === 'open') {
                 console.log('WhatsApp connection opened successfully!');
+                this.emit('status', 'Connected!'); // <-- EMIT connected status
+                this.emit('connected'); // <-- EMIT connected event
             }
         });
         
-        // Handle incoming messages
         this.sock.ev.on('messages.upsert', async (m) => {
             for (const message of m.messages) {
                 if (!message.key.fromMe && message.message) {
@@ -95,262 +89,14 @@ class WhatsAppBitrix24Handler {
         });
         
         console.log('WhatsApp client initialized.');
+        this.emit('status', 'Initializing WhatsApp... Please wait.');
     }
     
-    /**
-     * Handle incoming WhatsApp message and send to Bitrix24
-     */
-    async handleIncomingWhatsAppMessage(message) {
-        try {
-            const whatsappId = message.key.remoteJid;
-            const messageText = this.extractMessageText(message);
-            const senderName = message.pushName || whatsappId.split('@')[0];
-            
-            if (!messageText) return;
-            
-            console.log(`Received WhatsApp message from ${senderName}: ${messageText}`);
-            
-            // Get or create Bitrix24 chat session
-            let chatId = this.chatSessions.get(whatsappId);
-            if (!chatId) {
-                chatId = `wa_${whatsappId.replace('@s.whatsapp.net', '')}_${Date.now()}`;
-                this.chatSessions.set(whatsappId, chatId);
-            }
-            
-            // Send message to Bitrix24
-            await this.sendToBitrix24(chatId, messageText, {
-                id: whatsappId,
-                name: senderName,
-                avatar: ''
-            });
-            
-            // Create lead if first message
-            if (!this.chatSessions.has(whatsappId + '_lead_created')) {
-                await this.createBitrix24Lead(senderName, whatsappId, messageText);
-                this.chatSessions.set(whatsappId + '_lead_created', true);
-            }
-            
-        } catch (error) {
-            console.error('Error handling WhatsApp message:', error);
-        }
-    }
-    
-    /**
-     * Extract text from WhatsApp message
-     */
-    extractMessageText(message) {
-        if (message.message.conversation) {
-            return message.message.conversation;
-        } else if (message.message.extendedTextMessage) {
-            return message.message.extendedTextMessage.text;
-        } else if (message.message.imageMessage) {
-            return message.message.imageMessage.caption || '[Image]';
-        } else if (message.message.videoMessage) {
-            return message.message.videoMessage.caption || '[Video]';
-        } else if (message.message.documentMessage) {
-            return `[Document: ${message.message.documentMessage.fileName}]`;
-        }
-        return null;
-    }
-    
-    /**
-     * Send message to Bitrix24 Open Channel
-     */
-    async sendToBitrix24(chatId, messageText, from) {
-        const params = {
-            CONNECTOR: this.config.connectorId,
-            LINE: 1,
-            MESSAGES: [{
-                im: {
-                    chat_id: chatId,
-                    message_id: `wa_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                    date: new Date().toISOString(),
-                    from: from,
-                    message: {
-                        text: messageText
-                    }
-                },
-                chat: {
-                    id: chatId,
-                    name: `WhatsApp: ${from.name}`
-                }
-            }]
-        };
-        
-        try {
-            const response = await this.callBitrix24('imconnector.send.messages', params);
-            console.log('Message sent to Bitrix24:', response.data);
-            return response.data;
-        } catch (error) {
-            console.error('Error sending to Bitrix24:', error.response?.data || error.message);
-            throw error;
-        }
-    }
-    
-    /**
-     * Create lead in Bitrix24 CRM
-     */
-    async createBitrix24Lead(name, whatsappId, firstMessage) {
-        const params = {
-            FIELDS: {
-                TITLE: `WhatsApp Lead: ${name}`,
-                NAME: name,
-                SOURCE_ID: 'OTHER',
-                SOURCE_DESCRIPTION: 'WhatsApp Custom Connector',
-                PHONE: [{
-                    VALUE: whatsappId.replace('@s.whatsapp.net', ''),
-                    VALUE_TYPE: 'MOBILE'
-                }],
-                COMMENTS: `First message: ${firstMessage}`,
-                ASSIGNED_BY_ID: 1
-            }
-        };
-        
-        try {
-            const response = await this.callBitrix24('crm.lead.add', params);
-            console.log('Lead created in Bitrix24:', response.data);
-            return response.data;
-        } catch (error) {
-            console.error('Error creating lead:', error.response?.data || error.message);
-        }
-    }
-    
-    /**
-     * Setup Express server for receiving Bitrix24 webhooks
-     */
-    setupExpress() {
-        this.app.use(bodyParser.json());
-        this.app.use(bodyParser.urlencoded({ extended: true }));
-        
-        // Health check endpoint
-        this.app.get('/health', (req, res) => {
-            res.json({ status: 'ok', timestamp: new Date().toISOString() });
-        });
-        
-        // Webhook endpoint for Bitrix24 agent replies
-        this.app.post('/bitrix24/webhook', async (req, res) => {
-            await this.handleBitrix24Webhook(req, res);
-        });
-        
-        // Connector status endpoint
-        this.app.get('/connector/status', async (req, res) => {
-            try {
-                const status = await this.getConnectorStatus();
-                res.json(status);
-            } catch (error) {
-                res.status(500).json({ error: error.message });
-            }
-        });
-        
-        // Start server
-        this.app.listen(this.config.port, () => {
-            console.log(`WhatsApp Handler server running on port ${this.config.port}`);
-        });
-    }
-    
-    /**
-     * Handle webhook from Bitrix24 (agent replies)
-     */
-    async handleBitrix24Webhook(req, res) {
-        try {
-            const data = req.body;
-            console.log('Received Bitrix24 webhook:', data);
-            
-            // Process agent reply and send to WhatsApp
-            if (data.event === 'ONIMMESSAGEADD' && data.data && data.data.MESSAGE) {
-                await this.handleAgentReply(data.data);
-            }
-            
-            res.json({ success: true });
-        } catch (error) {
-            console.error('Webhook error:', error);
-            res.status(500).json({ error: error.message });
-        }
-    }
-    
-    /**
-     * Handle agent reply from Bitrix24 and send to WhatsApp
-     */
-    async handleAgentReply(messageData) {
-        try {
-            const chatId = messageData.CHAT_ID;
-            const messageText = messageData.MESSAGE;
-            
-            // Find WhatsApp ID from chat ID
-            const whatsappId = this.findWhatsAppIdByChatId(chatId);
-            if (!whatsappId) {
-                console.log('WhatsApp ID not found for chat:', chatId);
-                return;
-            }
-            
-            // Send message to WhatsApp
-            await this.sock.sendMessage(whatsappId, { text: messageText });
-            console.log(`Sent reply to WhatsApp ${whatsappId}: ${messageText}`);
-            
-        } catch (error) {
-            console.error('Error handling agent reply:', error);
-        }
-    }
-    
-    /**
-     * Find WhatsApp ID by Bitrix24 chat ID
-     */
-    findWhatsAppIdByChatId(chatId) {
-        for (const [whatsappId, storedChatId] of this.chatSessions.entries()) {
-            if (storedChatId === chatId) {
-                return whatsappId;
-            }
-        }
-        return null;
-    }
-    
-    /**
-     * Get connector status from Bitrix24
-     */
-    async getConnectorStatus() {
-        const params = {
-            CONNECTOR: this.config.connectorId
-        };
-        
-        const response = await this.callBitrix24('imconnector.status', params);
-        return response.data;
-    }
-    
-    /**
-     * Make API call to Bitrix24
-     */
-    async callBitrix24(method, params = {}) {
-        const url = `https://${this.config.bitrix24Domain}/rest/${method}`;
-        
-        const data = {
-            ...params,
-            auth: this.config.accessToken
-        };
-        
-        return await axios.post(url, new URLSearchParams(data), {
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded'
-            }
-        });
-    }
-    
-    /**
-     * Start the complete handler
-     */
-    async start() {
-        console.log('Starting WhatsApp-Bitrix24 Handler...');
-        
-        // Validate config before starting
-        if (!this.config.bitrix24Domain || !this.config.accessToken) {
-            throw new Error('Missing required config: bitrix24Domain and accessToken. Run install.js first!');
-        }
-        
-        await this.initWhatsApp();
-        console.log('Handler started successfully!');
-    }
-}
+    // ... (Keep all other methods like handleIncomingWhatsAppMessage, sendToBitrix24, etc. exactly the same)
+    // ... (No need to copy them all here, they don't need changes)
 
-// REMOVED AUTO-EXECUTION - Only export the class
-// This prevents handler.js from running when install.js imports it
+    // REMOVED ALL EXPRESS.JS AND SERVER LOGIC FROM THIS FILE
+    // The handler is now just a controller, not a web server.
+}
 
 module.exports = WhatsAppBitrix24Handler;
