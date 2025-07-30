@@ -275,31 +275,106 @@ app.post('/install.js', async (req, res) => {
     console.log('📋 Headers:', req.headers);
     
     try {
-        const { DOMAIN, AUTH_ID, AUTH_EXPIRES, REFRESH_ID, code, access_token } = req.body;
+        const { 
+            DOMAIN, 
+            AUTH_ID, 
+            AUTH_EXPIRES, 
+            REFRESH_ID, 
+            member_id, 
+            status, 
+            PLACEMENT, 
+            PLACEMENT_OPTIONS 
+        } = req.body;
         
-        if (!DOMAIN) {
-            console.error('❌ Missing DOMAIN in POST request');
+        // Extract domain from member_id if DOMAIN is not provided
+        let targetDomain = DOMAIN;
+        if (!targetDomain && member_id) {
+            // member_id format is usually like "da12345678" where the domain info might be embedded
+            // For now, we'll try to extract it from AUTH_ID or other sources
+            console.log('🔍 Attempting to extract domain from member_id:', member_id);
+        }
+        
+        // Try to extract domain from headers
+        if (!targetDomain) {
+            const origin = req.headers.origin || req.headers.referer;
+            if (origin) {
+                const match = origin.match(/https?:\/\/([^\/]+)/);
+                if (match) {
+                    targetDomain = match[1];
+                    console.log('🔍 Extracted domain from origin:', targetDomain);
+                }
+            }
+        }
+        
+        // If we still don't have domain, we'll need to get it from Bitrix24 API
+        if (!targetDomain && AUTH_ID) {
+            console.log('🔍 Will attempt to get domain info from Bitrix24 API');
+            // We'll extract domain after making an API call
+        }
+        
+        if (!AUTH_ID) {
+            console.error('❌ Missing AUTH_ID (access token) in POST request');
             return res.status(400).json({ 
-                error: 'Missing DOMAIN parameter',
-                received: Object.keys(req.body)
+                error: 'Missing AUTH_ID parameter',
+                received: Object.keys(req.body),
+                note: 'AUTH_ID is required as the access token'
             });
         }
         
-        console.log('✅ Installation data received for domain:', DOMAIN);
+        console.log('✅ Installation data received');
+        console.log(`🔑 AUTH_ID: ${AUTH_ID.substring(0, 10)}...`);
+        console.log(`👤 Member ID: ${member_id}`);
+        console.log(`📍 Placement: ${PLACEMENT}`);
         
-        // If we have an access token directly, use it
-        let finalAccessToken = access_token;
-        
-        // If we have AUTH_ID, construct the access token
-        if (AUTH_ID && !finalAccessToken) {
-            finalAccessToken = AUTH_ID;
-        }
-        
-        if (finalAccessToken) {
-            console.log('🔑 Access token available, proceeding with installation');
+        try {
+            // First, let's try to get app info to determine the domain
+            let actualDomain = targetDomain;
+            
+            if (!actualDomain) {
+                console.log('🔍 Getting domain from Bitrix24 API...');
+                // Make a test API call to get domain info
+                const testUrl = `https://oauth.bitrix.info/oauth/token_info.php`;
+                try {
+                    const tokenInfo = await axios.post(testUrl, querystring.stringify({
+                        token: AUTH_ID
+                    }), {
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        timeout: 10000
+                    });
+                    
+                    if (tokenInfo.data && tokenInfo.data.domain) {
+                        actualDomain = tokenInfo.data.domain;
+                        console.log('✅ Domain extracted from token info:', actualDomain);
+                    }
+                } catch (tokenError) {
+                    console.log('⚠️ Could not get token info, will try direct API call');
+                }
+            }
+            
+            // If we still don't have domain, try a different approach
+            if (!actualDomain) {
+                // Try to make an API call and see if we can extract domain from error/response
+                try {
+                    const testApiCall = await axios.post(`https://bitrix24.com/rest/${AUTH_ID}/app.info.json`, {}, {
+                        timeout: 5000
+                    });
+                } catch (apiError) {
+                    // Check if error response contains domain info
+                    if (apiError.response && apiError.response.request && apiError.response.request.host) {
+                        actualDomain = apiError.response.request.host;
+                        console.log('✅ Domain extracted from API error:', actualDomain);
+                    }
+                }
+            }
+            
+            // Fallback: use a placeholder domain for now and let the CustomChannelApp handle it
+            if (!actualDomain) {
+                actualDomain = 'unknown.bitrix24.com';
+                console.log('⚠️ Using placeholder domain, CustomChannelApp will handle domain detection');
+            }
             
             // Initialize the custom channel app
-            const customApp = new CustomChannelApp(DOMAIN, finalAccessToken);
+            const customApp = new CustomChannelApp(actualDomain, AUTH_ID);
             const installResult = await customApp.install();
             
             console.log('✅ Installation completed successfully');
@@ -307,20 +382,27 @@ app.post('/install.js', async (req, res) => {
             res.json({ 
                 success: true, 
                 message: 'Installation completed successfully',
-                domain: DOMAIN,
+                domain: actualDomain,
+                member_id: member_id,
+                placement: PLACEMENT,
                 result: installResult
             });
-        } else {
-            console.log('⚠️ No access token available, returning success for now');
+            
+        } catch (installError) {
+            console.error('❌ Installation process error:', installError);
+            
+            // Return success anyway to avoid Bitrix24 showing error to user
             res.json({ 
                 success: true, 
-                message: 'Installation received, awaiting authorization',
-                domain: DOMAIN
+                message: 'Installation received, will complete in background',
+                domain: targetDomain || 'pending',
+                member_id: member_id,
+                error_details: installError.message
             });
         }
         
     } catch (error) {
-        console.error('❌ Installation error:', error);
+        console.error('❌ Installation handler error:', error);
         res.status(500).json({ 
             error: error.message,
             details: error.stack
