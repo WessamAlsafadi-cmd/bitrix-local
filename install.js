@@ -24,7 +24,7 @@ const PORT = process.env.PORT || 3000;
 // Configuration
 const APP_ID = process.env.APP_ID || 'your_app_id_here';
 const APP_SECRET = process.env.APP_SECRET || 'your_app_secret_here';
-const APP_SCOPE = 'imconnector,imopenlines,crm';
+const APP_SCOPE = 'imconnector,imopenlines,crm,placement,event';
 const BASE_URL = process.env.BASE_URL || `https://bitrix-local.onrender.com`;
 
 app.use(express.json());
