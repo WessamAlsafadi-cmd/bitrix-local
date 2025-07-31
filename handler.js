@@ -305,44 +305,54 @@ class WhatsAppBitrix24Handler extends EventEmitter {
      * Find or create contact in Bitrix24
      */
     async findOrCreateContact(whatsappUserId, userName) {
-        try {
-            const phoneNumber = whatsappUserId.replace('@s.whatsapp.net', '').replace('@c.us', '');
-            
-            // First, try to find existing contact by phone
-            const searchResult = await this.callBitrix24Method('crm.contact.list', {
-                filter: { 'PHONE': phoneNumber },
-                select: ['ID', 'NAME', 'LAST_NAME']
-            });
-            
-            if (searchResult.result && searchResult.result.length > 0) {
-                const contact = searchResult.result[0];
-                console.log(`✅ Found existing contact: ${contact.NAME} (ID: ${contact.ID})`);
-                return contact.ID;
-            }
-            
-            // Create new contact if not found
-            const newContact = await this.callBitrix24Method('crm.contact.add', {
-                fields: {
-                    'NAME': userName || 'WhatsApp Contact',
-                    'PHONE': [{ 'VALUE': phoneNumber, 'VALUE_TYPE': 'MOBILE' }],
-                    'SOURCE_ID': 'WEBFORM',
-                    'SOURCE_DESCRIPTION': 'WhatsApp Integration',
-                    'COMMENTS': `Created from WhatsApp: ${whatsappUserId}`
-                }
-            });
-            
-            if (newContact.result) {
-                console.log(`✅ Created new contact: ${userName} (ID: ${newContact.result})`);
-                return newContact.result;
-            }
-            
-            return null;
-            
-        } catch (error) {
-            console.error('❌ Error finding/creating contact:', error);
-            return null;
+    try {
+        const phoneNumber = whatsappUserId.replace('@s.whatsapp.net', '').replace('@c.us', '');
+        
+        // Try to find existing contact by phone
+        const searchResult = await this.callBitrix24Method('crm.contact.list', {
+            filter: { PHONE: phoneNumber },
+            select: ['ID', 'NAME', 'LAST_NAME']
+        });
+        
+        if (searchResult.result && searchResult.result.length > 0) {
+            const contact = searchResult.result[0];
+            console.log(`✅ Found existing contact: ${contact.NAME} (ID: ${contact.ID})`);
+            return contact.ID;
         }
+        
+        // Create new contact
+        const nameParts = (userName || 'WhatsApp Contact').split(' ');
+        const firstName = nameParts[0] || 'WhatsApp';
+        const lastName = nameParts.slice(1).join(' ') || 'Contact';
+        
+        const newContact = await this.callBitrix24Method('crm.contact.add', {
+            fields: {
+                NAME: firstName,
+                LAST_NAME: lastName,
+                PHONE: [
+                    {
+                        VALUE: phoneNumber,
+                        VALUE_TYPE: 'MOBILE'
+                    }
+                ],
+                SOURCE_ID: 'WEBFORM',
+                SOURCE_DESCRIPTION: 'WhatsApp Integration',
+                COMMENTS: `Created from WhatsApp: ${whatsappUserId}`
+            }
+        });
+        
+        if (newContact.result) {
+            console.log(`✅ Created new contact: ${firstName} ${lastName} (ID: ${newContact.result})`);
+            return newContact.result;
+        }
+        
+        return null;
+        
+    } catch (error) {
+        console.error('❌ Error finding/creating contact:', error);
+        return null;
     }
+}
     
     /**
      * Process queued messages for retry
@@ -474,28 +484,31 @@ class WhatsAppBitrix24Handler extends EventEmitter {
      * Call Bitrix24 REST API method
      */
     async callBitrix24Method(method, params = {}) {
-        const url = `https://${this.config.bitrix24Domain}/rest/${this.config.accessToken}/${method}.json`;
-        
-        try {
-            const response = await axios.post(url, new URLSearchParams(params), {
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                timeout: 10000
-            });
-            
-            if (response.data.error) {
-                throw new Error(`Bitrix24 API error: ${response.data.error_description || response.data.error}`);
-            }
-            
-            return response.data;
-            
-        } catch (error) {
-            console.error(`❌ Bitrix24 API call failed (${method}):`, error.message);
-            throw error;
-        }
-    }
+    const url = `https://${this.config.bitrix24Domain}/rest/${method}`;
     
+    try {
+        const response = await axios.post(url, { ...params, access_token: this.config.accessToken }, {
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            timeout: 10000
+        });
+        
+        console.log(`📤 Request URL: ${url}`);
+        console.log(`📤 Request data:`, JSON.stringify({ ...params, access_token: '[hidden]' }, null, 2));
+        console.log(`📊 Response:`, JSON.stringify(response.data, null, 2));
+        
+        if (response.data.error) {
+            throw new Error(`Bitrix24 API error: ${response.data.error_description || response.data.error}`);
+        }
+        
+        return response.data;
+        
+    } catch (error) {
+        console.error(`❌ Bitrix24 API call failed (${method}):`, error.message);
+        throw error;
+    }
+}
     /**
      * Get connection status
      */
