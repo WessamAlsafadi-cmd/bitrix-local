@@ -19,6 +19,18 @@ if (!config.bitrix24Domain || !config.accessToken) {
     console.warn('⚠️ Missing required config: bitrix24Domain and accessToken');
 }
 
+// Create a proper logger for Baileys - JavaScript compatible
+const logger = {
+    level: 'silent',
+    child: function() { return logger; },
+    trace: function() {},
+    debug: function() {},
+    info: function() {},
+    warn: function() {},
+    error: function() {},
+    fatal: function() {}
+};
+
 class WhatsAppBitrix24Handler extends EventEmitter {
     constructor(config) {
         super();
@@ -41,13 +53,18 @@ class WhatsAppBitrix24Handler extends EventEmitter {
      */
     async initWhatsApp() {
         try {
+            console.log('🔄 Initializing WhatsApp connection...');
+            
             const { state, saveCreds } = await useMultiFileAuthState(this.config.authDir);
             
             this.sock = makeWASocket({
                 auth: state,
-                logger: { level: 'silent' },
-                browser: ['Custom WhatsApp Bot', 'Desktop', '1.0.0'],
-                printQRInTerminal: false
+                logger: logger, // Use our custom logger
+                browser: ['WhatsApp Bitrix24 Bot', 'Desktop', '1.0.0'],
+                printQRInTerminal: false,
+                generateHighQualityLinkPreview: true,
+                syncFullHistory: false,
+                markOnlineOnConnect: true
             });
             
             this.sock.ev.on('creds.update', saveCreds);
@@ -61,20 +78,22 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                 }
                 
                 if (connection === 'close') {
-                    const error = lastDisconnect?.error;
-                    const isBoom = error?.isBoom;
-                    const shouldReconnect = !isBoom || error.output?.statusCode !== DisconnectReason.loggedOut;
+                    const error = lastDisconnect && lastDisconnect.error;
+                    const shouldReconnect = error && error.output && error.output.statusCode !== DisconnectReason.loggedOut;
 
                     console.log('Connection closed due to ', lastDisconnect.error, ', reconnecting ', shouldReconnect);
                     this.emit('status', 'Connection Closed. Reconnecting...');
                     
                     if (shouldReconnect) {
-                        setTimeout(() => this.initWhatsApp(), 5000);
+                        setTimeout(() => {
+                            console.log('🔄 Attempting to reconnect...');
+                            this.initWhatsApp();
+                        }, 5000);
                     } else {
                         this.emit('status', 'Logged Out. Please scan QR again.');
                     }
                 } else if (connection === 'open') {
-                    console.log('WhatsApp connection opened successfully!');
+                    console.log('✅ WhatsApp connection opened successfully!');
                     this.emit('status', 'Connected!');
                     this.emit('connected');
                 }
@@ -88,12 +107,12 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                 }
             });
             
-            console.log('WhatsApp client initialized.');
+            console.log('📱 WhatsApp client initialized.');
             this.emit('status', 'Initializing WhatsApp... Please wait.');
             
         } catch (error) {
             console.error('❌ Error initializing WhatsApp:', error);
-            this.emit('status', `Error initializing WhatsApp: ${error.message}`);
+            this.emit('status', 'Error initializing WhatsApp: ' + error.message);
             throw error;
         }
     }
@@ -165,11 +184,11 @@ class WhatsAppBitrix24Handler extends EventEmitter {
         
         // Handle other message types
         if (message.message.locationMessage) {
-            return `📍 Location: ${message.message.locationMessage.degreesLatitude}, ${message.message.locationMessage.degreesLongitude}`;
+            return '📍 Location: ' + message.message.locationMessage.degreesLatitude + ', ' + message.message.locationMessage.degreesLongitude;
         }
         
         if (message.message.contactMessage) {
-            return `👤 Contact: ${message.message.contactMessage.displayName}`;
+            return '👤 Contact: ' + message.message.contactMessage.displayName;
         }
         
         return null;
@@ -185,8 +204,8 @@ class WhatsAppBitrix24Handler extends EventEmitter {
         
         // Create new session
         const session = {
-            chatId,
-            senderName,
+            chatId: chatId,
+            senderName: senderName,
             bitrixUserId: this.generateBitrixUserId(chatId),
             createdAt: new Date(),
             lastActivity: new Date(),
@@ -194,7 +213,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
         };
         
         this.chatSessions.set(chatId, session);
-        console.log(`📝 Created new chat session for: ${senderName} (${chatId})`);
+        console.log('📝 Created new chat session for: ' + senderName + ' (' + chatId + ')');
         
         return session;
     }
@@ -268,7 +287,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                         'OWNER_ID': contactId || 1,
                         'TYPE_ID': 4, // Call type
                         'SUBJECT': 'WhatsApp Message',
-                        'DESCRIPTION': `WhatsApp message from ${messageData.userName} (${messageData.userId}):\n\n${messageData.message}`,
+                        'DESCRIPTION': 'WhatsApp message from ' + messageData.userName + ' (' + messageData.userId + '):\n\n' + messageData.message,
                         'START_TIME': messageData.timestamp,
                         'END_TIME': messageData.timestamp,
                         'COMPLETED': 'N',
@@ -292,7 +311,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
             
             // Queue the message for retry
             this.messageQueue.push({
-                messageData,
+                messageData: messageData,
                 retryCount: 0,
                 timestamp: Date.now()
             });
@@ -305,54 +324,54 @@ class WhatsAppBitrix24Handler extends EventEmitter {
      * Find or create contact in Bitrix24
      */
     async findOrCreateContact(whatsappUserId, userName) {
-    try {
-        const phoneNumber = whatsappUserId.replace('@s.whatsapp.net', '').replace('@c.us', '');
-        
-        // Try to find existing contact by phone
-        const searchResult = await this.callBitrix24Method('crm.contact.list', {
-            filter: { PHONE: phoneNumber },
-            select: ['ID', 'NAME', 'LAST_NAME']
-        });
-        
-        if (searchResult.result && searchResult.result.length > 0) {
-            const contact = searchResult.result[0];
-            console.log(`✅ Found existing contact: ${contact.NAME} (ID: ${contact.ID})`);
-            return contact.ID;
-        }
-        
-        // Create new contact
-        const nameParts = (userName || 'WhatsApp Contact').split(' ');
-        const firstName = nameParts[0] || 'WhatsApp';
-        const lastName = nameParts.slice(1).join(' ') || 'Contact';
-        
-        const newContact = await this.callBitrix24Method('crm.contact.add', {
-            fields: {
-                NAME: firstName,
-                LAST_NAME: lastName,
-                PHONE: [
-                    {
-                        VALUE: phoneNumber,
-                        VALUE_TYPE: 'MOBILE'
-                    }
-                ],
-                SOURCE_ID: 'WEBFORM',
-                SOURCE_DESCRIPTION: 'WhatsApp Integration',
-                COMMENTS: `Created from WhatsApp: ${whatsappUserId}`
+        try {
+            const phoneNumber = whatsappUserId.replace('@s.whatsapp.net', '').replace('@c.us', '');
+            
+            // Try to find existing contact by phone
+            const searchResult = await this.callBitrix24Method('crm.contact.list', {
+                filter: { PHONE: phoneNumber },
+                select: ['ID', 'NAME', 'LAST_NAME']
+            });
+            
+            if (searchResult.result && searchResult.result.length > 0) {
+                const contact = searchResult.result[0];
+                console.log('✅ Found existing contact: ' + contact.NAME + ' (ID: ' + contact.ID + ')');
+                return contact.ID;
             }
-        });
-        
-        if (newContact.result) {
-            console.log(`✅ Created new contact: ${firstName} ${lastName} (ID: ${newContact.result})`);
-            return newContact.result;
+            
+            // Create new contact
+            const nameParts = (userName || 'WhatsApp Contact').split(' ');
+            const firstName = nameParts[0] || 'WhatsApp';
+            const lastName = nameParts.slice(1).join(' ') || 'Contact';
+            
+            const newContact = await this.callBitrix24Method('crm.contact.add', {
+                fields: {
+                    NAME: firstName,
+                    LAST_NAME: lastName,
+                    PHONE: [
+                        {
+                            VALUE: phoneNumber,
+                            VALUE_TYPE: 'MOBILE'
+                        }
+                    ],
+                    SOURCE_ID: 'WEBFORM',
+                    SOURCE_DESCRIPTION: 'WhatsApp Integration',
+                    COMMENTS: 'Created from WhatsApp: ' + whatsappUserId
+                }
+            });
+            
+            if (newContact.result) {
+                console.log('✅ Created new contact: ' + firstName + ' ' + lastName + ' (ID: ' + newContact.result + ')');
+                return newContact.result;
+            }
+            
+            return null;
+            
+        } catch (error) {
+            console.error('❌ Error finding/creating contact:', error);
+            return null;
         }
-        
-        return null;
-        
-    } catch (error) {
-        console.error('❌ Error finding/creating contact:', error);
-        return null;
     }
-}
     
     /**
      * Process queued messages for retry
@@ -363,7 +382,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
         }
         
         this.isProcessingQueue = true;
-        console.log(`📋 Processing message queue (${this.messageQueue.length} messages)`);
+        console.log('📋 Processing message queue (' + this.messageQueue.length + ' messages)');
         
         while (this.messageQueue.length > 0) {
             const queueItem = this.messageQueue.shift();
@@ -380,7 +399,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                 queueItem.retryCount++;
                 if (queueItem.retryCount < 3) {
                     this.messageQueue.push(queueItem);
-                    console.log(`⚠️ Message queued for retry (attempt ${queueItem.retryCount + 1})`);
+                    console.log('⚠️ Message queued for retry (attempt ' + (queueItem.retryCount + 1) + ')');
                 }
             }
             
@@ -434,7 +453,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
             }
             
             await this.sock.sendMessage(chatId, { text: message });
-            console.log(`📱 Sent WhatsApp message to ${chatId}: ${message.substring(0, 50)}...`);
+            console.log('📱 Sent WhatsApp message to ' + chatId + ': ' + message.substring(0, 50) + '...');
             
         } catch (error) {
             console.error('❌ Error sending WhatsApp message:', error);
@@ -445,7 +464,9 @@ class WhatsAppBitrix24Handler extends EventEmitter {
     /**
      * Send WhatsApp message from Bitrix24 (for outgoing messages)
      */
-    async sendOutgoingMessage(chatId, message, files = []) {
+    async sendOutgoingMessage(chatId, message, files) {
+        files = files || [];
+        
         try {
             if (!this.sock) {
                 throw new Error('WhatsApp socket not initialized');
@@ -471,7 +492,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                 }
             }
             
-            console.log(`📤 Sent outgoing message to ${chatId}`);
+            console.log('📤 Sent outgoing message to ' + chatId);
             return true;
             
         } catch (error) {
@@ -483,32 +504,36 @@ class WhatsAppBitrix24Handler extends EventEmitter {
     /**
      * Call Bitrix24 REST API method
      */
-    async callBitrix24Method(method, params = {}) {
-    const url = `https://${this.config.bitrix24Domain}/rest/${method}`;
-    
-    try {
-        const response = await axios.post(url, { ...params, access_token: this.config.accessToken }, {
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            timeout: 10000
-        });
+    async callBitrix24Method(method, params) {
+        params = params || {};
+        const url = 'https://' + this.config.bitrix24Domain + '/rest/' + method;
         
-        console.log(`📤 Request URL: ${url}`);
-        console.log(`📤 Request data:`, JSON.stringify({ ...params, access_token: '[hidden]' }, null, 2));
-        console.log(`📊 Response:`, JSON.stringify(response.data, null, 2));
-        
-        if (response.data.error) {
-            throw new Error(`Bitrix24 API error: ${response.data.error_description || response.data.error}`);
+        try {
+            const requestData = Object.assign({}, params, { access_token: this.config.accessToken });
+            
+            const response = await axios.post(url, requestData, {
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                timeout: 10000
+            });
+            
+            console.log('📤 Request URL: ' + url);
+            console.log('📤 Request data:', JSON.stringify(Object.assign({}, params, { access_token: '[hidden]' }), null, 2));
+            console.log('📊 Response:', JSON.stringify(response.data, null, 2));
+            
+            if (response.data.error) {
+                throw new Error('Bitrix24 API error: ' + (response.data.error_description || response.data.error));
+            }
+            
+            return response.data;
+            
+        } catch (error) {
+            console.error('❌ Bitrix24 API call failed (' + method + '):', error.message);
+            throw error;
         }
-        
-        return response.data;
-        
-    } catch (error) {
-        console.error(`❌ Bitrix24 API call failed (${method}):`, error.message);
-        throw error;
     }
-}
+    
     /**
      * Get connection status
      */
@@ -551,7 +576,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
         
         // Process remaining queued messages
         if (this.messageQueue.length > 0) {
-            console.log(`📋 Processing ${this.messageQueue.length} remaining messages...`);
+            console.log('📋 Processing ' + this.messageQueue.length + ' remaining messages...');
             await this.processMessageQueue();
         }
         
