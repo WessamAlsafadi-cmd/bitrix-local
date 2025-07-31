@@ -1,3 +1,5 @@
+// Fixed install.js with correct OAuth scopes
+
 // Add this log at the very top to see if the file starts executing at all.
 console.log('Starting install.js...');
 
@@ -38,9 +40,13 @@ try {
     const PORT = process.env.PORT || 3000;
     const APP_ID = process.env.APP_ID || 'your_app_id_here';
     const APP_SECRET = process.env.APP_SECRET || 'your_app_secret_here';
-    const APP_SCOPE = 'imconnector,imopenlines,crm,placement,event';
+    
+    // ✅ FIXED: Added 'user' scope to the list
+    const APP_SCOPE = 'user,crm,imconnector,imopenlines,placement,event';
+    
     const BASE_URL = process.env.BASE_URL || `https://your-app.onrender.com`;
     console.log('SUCCESS: Configuration loaded.');
+    console.log('📋 Using OAuth scopes:', APP_SCOPE);
 
     app.use(express.json());
     app.use(express.urlencoded({ extended: true }));
@@ -164,12 +170,17 @@ try {
         if (!DOMAIN) {
             return res.status(400).send('<h2>Installation Error</h2><p>Missing DOMAIN parameter.</p>');
         }
+        
+        console.log('🔐 Creating OAuth URL with scopes:', APP_SCOPE);
+        
         const authUrl = `https://${DOMAIN}/oauth/authorize/?` + querystring.stringify({
             client_id: APP_ID,
             response_type: 'code',
             scope: APP_SCOPE,
             redirect_uri: `${BASE_URL}/oauth/callback`
         });
+        
+        console.log('🌐 OAuth URL:', authUrl);
         res.send(`<script>window.location.href = '${authUrl}';</script>`);
     });
 
@@ -204,22 +215,27 @@ try {
             const { code, domain } = req.query;
             if (!code || !domain) throw new Error('Missing code or domain');
 
+            console.log('🔄 Exchanging code for token with scopes:', APP_SCOPE);
+
             const tokenData = {
                 grant_type: 'authorization_code',
                 client_id: APP_ID,
                 client_secret: APP_SECRET,
                 code: code,
+                scope: APP_SCOPE // ✅ FIXED: Include scope in token request
             };
 
             const tokenResponse = await axios.post(`https://${domain}/oauth/token/`, querystring.stringify(tokenData));
-            const { access_token } = tokenResponse.data;
+            const { access_token, scope } = tokenResponse.data;
 
             if (!access_token) throw new Error('Failed to obtain access token');
+
+            console.log('✅ Received access token with scope:', scope);
 
             const customApp = new CustomChannelApp(domain, access_token);
             const installResult = await customApp.install();
 
-            res.send(getInstallResultHTML(installResult, access_token, domain));
+            res.send(getInstallResultHTML(installResult, access_token, domain, scope));
 
         } catch (error) {
             console.error('❌ OAuth callback error:', error);
@@ -251,18 +267,22 @@ try {
         <body>
             <h2>Install the Bitrix24 WhatsApp Connector</h2>
             <p>Please initiate installation via your Bitrix24 portal.</p>
+            <p><strong>Required scopes:</strong> ${APP_SCOPE}</p>
         </body>
         </html>`;
     }
 
-    function getInstallResultHTML(installResult, accessToken, domain) {
+    function getInstallResultHTML(installResult, accessToken, domain, scope = 'unknown') {
         return `
         <!DOCTYPE html>
         <html>
         <head><title>Installation Result</title></head>
         <body>
             <h2>Installation Result</h2>
-            <pre>${JSON.stringify({ installResult, accessToken, domain }, null, 2)}</pre>
+            <p><strong>Domain:</strong> ${domain}</p>
+            <p><strong>Granted Scopes:</strong> ${scope}</p>
+            <p><strong>Status:</strong> ${installResult.success ? '✅ Success' : '❌ Failed'}</p>
+            <pre>${JSON.stringify(installResult, null, 2)}</pre>
         </body>
         </html>`;
     }
@@ -273,6 +293,7 @@ try {
         console.log(`🚀 Server running on port ${PORT}`);
         console.log(`📡 Socket.IO enabled`);
         console.log(`🌐 Access at: ${BASE_URL}`);
+        console.log(`🔐 OAuth scopes: ${APP_SCOPE}`);
     });
 
     // --- Graceful Shutdown ---
