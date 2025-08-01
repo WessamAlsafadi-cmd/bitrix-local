@@ -841,11 +841,11 @@ try {
         </div>
     </div>
 
-    <script>
+     <script>
         function debugLog(message) {
             const debugElement = document.getElementById('debugLog');
             const timestamp = new Date().toLocaleTimeString();
-            debugElement.innerHTML += '<div>[' + timestamp + '] ' + message + '</div>'; // Using string concatenation
+            debugElement.innerHTML += '<div>[' + timestamp + '] ' + message + '</div>';
             debugElement.scrollTop = debugElement.scrollHeight;
             console.log('[DEBUG] ' + message);
         }
@@ -858,7 +858,6 @@ try {
             debugLog('🔌 Initializing Socket.IO connection...');
             socket = io();
 
-            // Log all socket events for debugging
             socket.onAny((event, ...args) => {
                 debugLog('📡 Socket event: ' + event + ', Args: ' + JSON.stringify(args.slice(0, 2)));
             });
@@ -867,9 +866,9 @@ try {
                 debugLog('✅ Connected to server - Socket ID: ' + socket.id);
                 updateStatus('configStatus', 'Connected to server', 'success');
                 document.getElementById('bitrixConnectionStatus').textContent = '✅ Connected';
-                socket.emit('get_status'); // Request initial status
+                socket.emit('get_status');
             });
-            
+
             socket.on('disconnect', () => {
                 debugLog('❌ Disconnected from server');
                 updateStatus('configStatus', 'Disconnected from server', 'error');
@@ -877,29 +876,14 @@ try {
                 document.getElementById('whatsappConnectionStatus').textContent = '❌ Disconnected';
                 isConnected = false;
             });
-            
+
             socket.on('qr_code', (qr) => {
                 debugLog('📱 QR Code received - Length: ' + qr.length);
-                console.log('QR Data:', qr.substring(0, 100) + '...');
-                try {
-                    if (typeof QRCode === 'undefined') {
-                        debugLog('❌ QRCode library not loaded');
-                        displayRawQrData(qr);
-                        updateStatus('whatsappStatus', 'QRCode library failed to load. See raw data below.', 'error');
-                        return;
-                    }
-                    const canvas = document.getElementById('qrCode');
-                    if (!canvas) throw new Error('Canvas element not found');
-                    displayQRCode(qr);
-                    activateStep(2);
-                    updateStatus('whatsappStatus', 'QR Code received. Please scan with your phone.', 'info');
-                } catch (error) {
-                    debugLog('❌ Error displaying QR code: ' + error.message);
-                    displayRawQrData(qr);
-                    updateStatus('whatsappStatus', 'Error displaying QR code: ' + error.message + '. See raw data below.', 'error');
-                }
+                displayQRCode(qr);
+                activateStep(2);
+                updateStatus('whatsappStatus', 'QR Code received. Please scan with your phone.', 'info');
             });
-            
+
             socket.on('status_update', (status) => {
                 debugLog('📊 Status update: ' + status);
                 updateStatus('whatsappStatus', status, 'info');
@@ -911,7 +895,7 @@ try {
                     activateStep(2);
                 }
             });
-            
+
             socket.on('whatsapp_connected', () => {
                 debugLog('🎉 WhatsApp connected successfully!');
                 isConnected = true;
@@ -921,13 +905,13 @@ try {
                 updateConnectionStatus();
                 activateStep(3);
             });
-            
+
             socket.on('message_received', (messageData) => {
                 debugLog('📨 Message received from: ' + (messageData.userName || 'Unknown'));
                 messageCount++;
                 document.getElementById('messagesProcessed').textContent = messageCount;
             });
-            
+
             socket.on('error', (error) => {
                 debugLog('❌ Socket error: ' + error);
                 updateStatus('configStatus', 'Error: ' + error, 'error');
@@ -936,7 +920,6 @@ try {
 
             socket.on('status_response', (status) => {
                 debugLog('📋 Status response received');
-                console.log('Status response:', status);
                 document.getElementById('whatsappConnectionStatus').textContent = 
                     status.whatsappConnected ? '✅ Connected' : '❌ Disconnected';
                 document.getElementById('activeSessions').textContent = status.activeSessions || 0;
@@ -950,35 +933,31 @@ try {
             });
         }
 
-        function updateStatus(elementId, message, type) {
-            const statusElement = document.getElementById(elementId);
-            statusElement.innerHTML = message;
-            statusElement.className = 'status ' + type;
-        }
-
         function displayQRCode(qrData) {
-    debugLog('📱 Attempting to render QR code...');
-    const canvas = document.getElementById('qrCode');
-    if (!canvas) {
-        debugLog('❌ Canvas element not found');
-        return;
-    }
+            debugLog('📱 Attempting to render QR code...');
+            const canvas = document.getElementById('qrCode');
+            if (!canvas) {
+                debugLog('❌ Canvas element not found');
+                return;
+            }
 
-    try {
-        const qr = new QRious({
-            element: canvas,
-            value: qrData,
-            size: 256,
-            level: 'H'
-        });
+            try {
+                const qr = new QRious({
+                    element: canvas,
+                    value: qrData,
+                    size: 256,
+                    level: 'H'
+                });
 
-        document.getElementById('qrContainer').classList.remove('hidden');
-        debugLog('✅ QR code rendered successfully');
-    } catch (err) {
-        debugLog('❌ Error rendering QR code: ' + err.message);
-        displayRawQrData(qrData);
-    }
-}
+                const qrContainer = document.getElementById('qrContainer');
+                qrContainer.classList.remove('hidden');
+                qrContainer.style.display = 'block';
+                debugLog('✅ QR code rendered successfully');
+            } catch (err) {
+                debugLog('❌ Error rendering QR code: ' + err.message);
+                displayRawQrData(qrData);
+            }
+        }
 
         function displayRawQrData(qrData) {
             debugLog('📜 Displaying raw QR data as fallback...');
@@ -994,6 +973,12 @@ try {
             debugLog('🔄 Activating step ' + stepNumber);
             document.querySelectorAll('.step').forEach(step => step.classList.remove('active'));
             document.getElementById('step' + stepNumber).classList.add('active');
+        }
+
+        function updateStatus(elementId, message, type) {
+            const statusElement = document.getElementById(elementId);
+            statusElement.innerHTML = message;
+            statusElement.className = 'status ' + type;
         }
 
         function updateConnectionStatus() {
@@ -1057,7 +1042,6 @@ try {
             }
         }
 
-        // Auto-fill domain if available from URL params
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('domain')) {
             document.getElementById('domain').value = urlParams.get('domain');
@@ -1068,14 +1052,12 @@ try {
             debugLog('📋 Auto-filled access token');
         }
 
-        // Initialize socket connection on page load
         window.onload = () => {
             debugLog('🖥️ Page loaded, initializing socket...');
             initSocket();
             socket.emit('get_status');
         };
 
-        // Update status every 30 seconds
         setInterval(() => {
             if (isConnected) {
                 debugLog('🔄 Periodic status update');
