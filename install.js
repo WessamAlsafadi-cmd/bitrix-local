@@ -489,7 +489,7 @@ try {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WhatsApp Connector - Bitrix24</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -957,44 +957,28 @@ try {
         }
 
         function displayQRCode(qrData) {
-            debugLog('📱 Attempting to render QR code...');
-            const canvas = document.getElementById('qrCode');
-            if (!canvas) {
-                debugLog('❌ Canvas element not found');
-                throw new Error('Canvas element not found');
-            }
+    debugLog('📱 Attempting to render QR code...');
+    const canvas = document.getElementById('qrCode');
+    if (!canvas) {
+        debugLog('❌ Canvas element not found');
+        return;
+    }
 
-            // Clear previous content
-            const context = canvas.getContext('2d');
-            context.clearRect(0, 0, canvas.width, canvas.height);
+    try {
+        const qr = new QRious({
+            element: canvas,
+            value: qrData,
+            size: 256,
+            level: 'H'
+        });
 
-            try {
-                QRCode.toCanvas(canvas, qrData, {
-                    width: 256,
-                    margin: 2,
-                    color: {
-                        dark: '#000000',
-                        light: '#FFFFFF'
-                    }
-                }, (error) => {
-                    if (error) {
-                        debugLog('❌ QRCode.toCanvas error: ' + error.message);
-                        throw error;
-                    }
-                    debugLog('✅ QR code rendered successfully');
-                });
-
-                // Ensure QR container is visible
-                const qrContainer = document.getElementById('qrContainer');
-                qrContainer.classList.remove('hidden');
-                qrContainer.style.display = 'block';
-                debugLog('✅ QR container made visible');
-            } catch (error) {
-                debugLog('❌ Error rendering QR code: ' + error.message);
-                throw error;
-            }
-        }
-
+        document.getElementById('qrContainer').classList.remove('hidden');
+        debugLog('✅ QR code rendered successfully');
+    } catch (err) {
+        debugLog('❌ Error rendering QR code: ' + err.message);
+        displayRawQrData(qrData);
+    }
+}
         function displayRawQrData(qrData) {
             debugLog('📜 Displaying raw QR data as fallback...');
             const rawQrElement = document.getElementById('rawQrData');
