@@ -1,6 +1,5 @@
 /**
- * WhatsApp to Bitrix24 Message Handler (Open Lines Version)
- * Using Baileys.js for WhatsApp connection with proper Bitrix24 Open Lines integration
+ * WhatsApp to Bitrix24 Message Handler (Fixed Version)
  */
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
@@ -19,7 +18,7 @@ if (!config.bitrix24Domain || !config.accessToken) {
     console.warn('⚠️ Missing required config: bitrix24Domain and accessToken');
 }
 
-// Create a proper logger for Baileys - JavaScript compatible
+// Create a proper logger for Baileys
 const logger = {
     level: 'silent',
     child: function() { return logger; },
@@ -46,10 +45,14 @@ class WhatsAppBitrix24Handler extends EventEmitter {
         this.chatSessions = new Map();
         this.messageQueue = [];
         this.isProcessingQueue = false;
+        
+        // Bind this context to methods
+        this.initWhatsApp = this.initWhatsApp.bind(this);
+        this.handleConnectionUpdate = this.handleConnectionUpdate.bind(this);
     }
     
     /**
-     * Initialize WhatsApp connection
+     * Initialize WhatsApp connection with better QR handling
      */
     async initWhatsApp() {
         try {
@@ -59,45 +62,17 @@ class WhatsAppBitrix24Handler extends EventEmitter {
             
             this.sock = makeWASocket({
                 auth: state,
-                logger: logger, // Use our custom logger
+                logger: logger,
                 browser: ['WhatsApp Bitrix24 Bot', 'Desktop', '1.0.0'],
-                printQRInTerminal: false,
+                printQRInTerminal: true, // Also print to terminal for debugging
                 generateHighQualityLinkPreview: true,
                 syncFullHistory: false,
-                markOnlineOnConnect: true
+                markOnlineOnConnect: true,
+                qrTimeout: 60000 // 60 second timeout
             });
             
             this.sock.ev.on('creds.update', saveCreds);
-            
-            this.sock.ev.on('connection.update', (update) => {
-                const { connection, lastDisconnect, qr } = update;
-                
-                if (qr) {
-                    console.log('📱 QR Code received. Emitting to frontend...');
-                    this.emit('qr', qr);
-                }
-                
-                if (connection === 'close') {
-                    const error = lastDisconnect && lastDisconnect.error;
-                    const shouldReconnect = error && error.output && error.output.statusCode !== DisconnectReason.loggedOut;
-
-                    console.log('Connection closed due to ', lastDisconnect.error, ', reconnecting ', shouldReconnect);
-                    this.emit('status', 'Connection Closed. Reconnecting...');
-                    
-                    if (shouldReconnect) {
-                        setTimeout(() => {
-                            console.log('🔄 Attempting to reconnect...');
-                            this.initWhatsApp();
-                        }, 5000);
-                    } else {
-                        this.emit('status', 'Logged Out. Please scan QR again.');
-                    }
-                } else if (connection === 'open') {
-                    console.log('✅ WhatsApp connection opened successfully!');
-                    this.emit('status', 'Connected!');
-                    this.emit('connected');
-                }
-            });
+            this.sock.ev.on('connection.update', this.handleConnectionUpdate);
             
             this.sock.ev.on('messages.upsert', async (m) => {
                 for (const message of m.messages) {
@@ -114,6 +89,61 @@ class WhatsAppBitrix24Handler extends EventEmitter {
             console.error('❌ Error initializing WhatsApp:', error);
             this.emit('status', 'Error initializing WhatsApp: ' + error.message);
             throw error;
+        }
+    }
+    
+    /**
+     * Handle connection updates with better QR emission
+     */
+    handleConnectionUpdate(update) {
+        const { connection, lastDisconnect, qr } = update;
+        
+        console.log('🔄 Connection update:', { connection, hasQR: !!qr, hasError: !!lastDisconnect?.error });
+        
+        if (qr) {
+            console.log('📱 QR Code received. Emitting to frontend...');
+            console.log('📱 QR Code length:', qr.length);
+            console.log('📱 QR Code preview:', qr.substring(0, 50) + '...');
+            
+            // Emit QR code to frontend
+            this.emit('qr', qr);
+            
+            // Also emit status update
+            this.emit('status', 'QR Code generated. Please scan with WhatsApp.');
+        }
+        
+        if (connection === 'close') {
+            const error = lastDisconnect?.error;
+            let shouldReconnect = false;
+            
+            if (error) {
+                const statusCode = error.output?.statusCode;
+                shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                
+                console.log('❌ Connection closed:', {
+                    error: error.message,
+                    statusCode,
+                    shouldReconnect
+                });
+            }
+
+            this.emit('status', 'Connection Closed. Reconnecting...');
+            
+            if (shouldReconnect) {
+                setTimeout(() => {
+                    console.log('🔄 Attempting to reconnect...');
+                    this.initWhatsApp();
+                }, 5000);
+            } else {
+                this.emit('status', 'Logged Out. Please scan QR again.');
+            }
+        } else if (connection === 'connecting') {
+            console.log('🔄 Connecting to WhatsApp...');
+            this.emit('status', 'Connecting to WhatsApp...');
+        } else if (connection === 'open') {
+            console.log('✅ WhatsApp connection opened successfully!');
+            this.emit('status', 'Connected!');
+            this.emit('connected');
         }
     }
     
@@ -147,10 +177,13 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                 timestamp: new Date(timestamp * 1000).toISOString()
             };
             
+            // Emit message received event
+            this.emit('message_received', messageData);
+            
             // Send to Bitrix24
             await this.sendToBitrix24(messageData);
             
-            // Auto-reply or processing logic can be added here
+            // Auto-reply or processing logic
             await this.processAutoReply(chatId, messageText, session);
             
         } catch (error) {
