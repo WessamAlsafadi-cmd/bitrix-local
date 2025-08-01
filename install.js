@@ -979,6 +979,7 @@ try {
         displayRawQrData(qrData);
     }
 }
+
         function displayRawQrData(qrData) {
             debugLog('📜 Displaying raw QR data as fallback...');
             const rawQrElement = document.getElementById('rawQrData');
