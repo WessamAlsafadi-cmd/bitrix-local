@@ -806,6 +806,7 @@ try {
                         3. Tap "Link a Device"<br>
                         4. Scan this QR code
                     </div>
+                    <div id="rawQrData" class="hidden"></div> <!-- Fallback for raw QR data -->
                 </div>
                 <div id="whatsappStatus"></div>
             </div>
@@ -875,12 +876,19 @@ try {
                 debugLog('📱 QR Code received - Length: ' + qr.length);
                 console.log('QR Data:', qr.substring(0, 100) + '...');
                 try {
+                    if (typeof QRCode === 'undefined') {
+                        debugLog('❌ QRCode library not loaded');
+                        displayRawQrData(qr); // Fallback to show raw data
+                        updateStatus('whatsappStatus', 'QRCode library failed to load. See raw data below.', 'error');
+                        return;
+                    }
                     displayQRCode(qr);
                     activateStep(2);
                     updateStatus('whatsappStatus', 'QR Code received. Please scan with your phone.', 'info');
                 } catch (error) {
                     debugLog('❌ Error displaying QR code: ' + error.message);
-                    updateStatus('whatsappStatus', 'Error displaying QR code: ' + error.message, 'error');
+                    displayRawQrData(qr); // Fallback
+                    updateStatus('whatsappStatus', 'Error displaying QR code: ' + error.message + '. See raw data below.', 'error');
                 }
             });
             
@@ -969,12 +977,22 @@ try {
                 // Ensure QR container is visible
                 const qrContainer = document.getElementById('qrContainer');
                 qrContainer.classList.remove('hidden');
-                qrContainer.style.display = 'block'; // Force visibility
+                qrContainer.style.display = 'block';
                 debugLog('✅ QR container made visible');
             } catch (error) {
                 debugLog('❌ Error rendering QR code: ' + error.message);
                 throw error;
             }
+        }
+
+        function displayRawQrData(qrData) {
+            debugLog('📜 Displaying raw QR data as fallback...');
+            const rawQrElement = document.getElementById('rawQrData');
+            rawQrElement.textContent = 'Raw QR Data: ' + qrData.substring(0, 100) + (qrData.length > 100 ? '...' : '');
+            rawQrElement.classList.remove('hidden');
+            const qrContainer = document.getElementById('qrContainer');
+            qrContainer.classList.remove('hidden');
+            qrContainer.style.display = 'block';
         }
 
         function activateStep(stepNumber) {
