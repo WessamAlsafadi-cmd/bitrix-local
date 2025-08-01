@@ -1,4 +1,4 @@
-// Updated install.js with proper Web UI and fixed API calls
+// Fixed install.js with better Socket.IO and QR code handling
 
 console.log('Starting install.js...');
 
@@ -50,7 +50,8 @@ try {
 
     console.log('🚀 Bitrix24 WhatsApp Connector Server configuration complete.');
 
-    let whatsappHandler = null;
+    // Store WhatsApp handler instances per socket
+    const whatsappHandlers = new Map();
     const activeConnections = new Map();
 
     // --- Webhook endpoint for Bitrix24 events ---
@@ -81,116 +82,207 @@ try {
     async function handleBitrixMessage(data, auth) {
         try {
             console.log('📨 Handling Bitrix24 message:', data);
-            if (!whatsappHandler || !data.CHAT_ID || !data.MESSAGE) return;
+            // Find the appropriate WhatsApp handler
+            const handler = Array.from(whatsappHandlers.values()).find(h => 
+                h.config.bitrix24Domain === auth.domain
+            );
+            
+            if (!handler || !data.CHAT_ID || !data.MESSAGE) return;
+            
             const whatsappChatId = data.CHAT_ID;
             const message = data.MESSAGE;
-            await whatsappHandler.sendOutgoingMessage(whatsappChatId, message);
+            await handler.sendOutgoingMessage(whatsappChatId, message);
             console.log('✅ Message sent to WhatsApp');
         } catch (error) {
             console.error('❌ Error handling Bitrix message:', error);
         }
     }
-    async function handleNewLead(data, auth) { console.log('🎯 New lead created:', data); }
-    async function handleNewContact(data, auth) { console.log('👤 New contact created:', data); }
+    
+    async function handleNewLead(data, auth) { 
+        console.log('🎯 New lead created:', data); 
+    }
+    
+    async function handleNewContact(data, auth) { 
+        console.log('👤 New contact created:', data); 
+    }
 
-    // --- Socket.IO Logic ---
+    // --- Enhanced Socket.IO Logic ---
     io.on('connection', (socket) => {
         console.log('👤 User connected:', socket.id);
 
         socket.on('initialize_whatsapp', async (data) => {
             try {
                 console.log('🔄 Initializing WhatsApp for user:', socket.id);
+                console.log('📋 Received data:', { 
+                    domain: data.domain, 
+                    hasToken: !!data.accessToken 
+                });
+                
                 if (!data.domain || !data.accessToken) {
+                    console.error('❌ Missing domain or access token');
                     socket.emit('error', 'Missing domain or access token');
                     return;
                 }
                 
+                // Store connection info
                 activeConnections.set(socket.id, {
                     domain: data.domain,
                     accessToken: data.accessToken,
                     connectedAt: new Date()
                 });
                 
-                whatsappHandler = new WhatsAppBitrix24Handler({
+                // Create new WhatsApp handler instance
+                const whatsappHandler = new WhatsAppBitrix24Handler({
                     bitrix24Domain: data.domain,
                     accessToken: data.accessToken,
                     connectorId: 'custom_whatsapp'
                 });
                 
+                // Store handler instance
+                whatsappHandlers.set(socket.id, whatsappHandler);
+                
+                // Set up event listeners with proper error handling
                 whatsappHandler.on('qr', (qr) => {
-                    console.log('📱 Emitting QR code to client');
-                    socket.emit('qr_code', qr);
+                    console.log('📱 QR Code received for socket:', socket.id);
+                    console.log('📱 QR Code length:', qr.length);
+                    console.log('📱 QR Code preview:', qr.substring(0, 50) + '...');
+                    
+                    try {
+                        socket.emit('qr_code', qr);
+                        console.log('✅ QR Code emitted to client');
+                    } catch (emitError) {
+                        console.error('❌ Failed to emit QR code:', emitError);
+                    }
                 });
                 
                 whatsappHandler.on('status', (status) => {
-                    console.log('📊 Status update:', status);
-                    socket.emit('status_update', status);
+                    console.log('📊 Status update for socket', socket.id + ':', status);
+                    try {
+                        socket.emit('status_update', status);
+                    } catch (emitError) {
+                        console.error('❌ Failed to emit status:', emitError);
+                    }
                 });
                 
                 whatsappHandler.on('connected', () => {
-                    console.log('✅ WhatsApp connected, notifying client');
-                    socket.emit('whatsapp_connected');
+                    console.log('✅ WhatsApp connected for socket:', socket.id);
+                    try {
+                        socket.emit('whatsapp_connected');
+                    } catch (emitError) {
+                        console.error('❌ Failed to emit connected event:', emitError);
+                    }
                 });
                 
                 whatsappHandler.on('message_received', (messageData) => {
-                    console.log('📨 Message received, forwarding to client');
-                    socket.emit('message_received', messageData);
+                    console.log('📨 Message received for socket', socket.id + ':', messageData.messageId);
+                    try {
+                        socket.emit('message_received', messageData);
+                    } catch (emitError) {
+                        console.error('❌ Failed to emit message:', emitError);
+                    }
                 });
                 
+                whatsappHandler.on('error', (error) => {
+                    console.error('❌ WhatsApp handler error for socket', socket.id + ':', error);
+                    try {
+                        socket.emit('error', error.message || error);
+                    } catch (emitError) {
+                        console.error('❌ Failed to emit error:', emitError);
+                    }
+                });
+                
+                // Initialize WhatsApp connection
+                console.log('🚀 Starting WhatsApp initialization...');
                 await whatsappHandler.initWhatsApp();
                 
             } catch (error) {
-                console.error('❌ Error initializing WhatsApp:', error);
+                console.error('❌ Error initializing WhatsApp for socket', socket.id + ':', error);
                 socket.emit('error', error.message);
+                
+                // Clean up on error
+                whatsappHandlers.delete(socket.id);
+                activeConnections.delete(socket.id);
             }
         });
 
         socket.on('send_message', async (data) => {
             try {
-                if (!whatsappHandler) {
+                const handler = whatsappHandlers.get(socket.id);
+                if (!handler) {
                     socket.emit('error', 'WhatsApp not connected');
                     return;
                 }
+                
                 const { chatId, message, files } = data;
-                await whatsappHandler.sendOutgoingMessage(chatId, message, files);
+                await handler.sendOutgoingMessage(chatId, message, files);
                 socket.emit('message_sent', { success: true });
             } catch (error) {
-                console.error('❌ Error sending message:', error);
+                console.error('❌ Error sending message for socket', socket.id + ':', error);
                 socket.emit('error', error.message);
             }
         });
 
         socket.on('get_status', () => {
-            if (whatsappHandler) {
-                const status = whatsappHandler.getConnectionStatus();
-                socket.emit('status_response', status);
-            } else {
-                socket.emit('status_response', { connected: false, activeSessions: 0 });
+            try {
+                const handler = whatsappHandlers.get(socket.id);
+                if (handler) {
+                    const status = handler.getConnectionStatus();
+                    socket.emit('status_response', status);
+                } else {
+                    socket.emit('status_response', { 
+                        connected: false, 
+                        activeSessions: 0,
+                        whatsappConnected: false
+                    });
+                }
+            } catch (error) {
+                console.error('❌ Error getting status for socket', socket.id + ':', error);
+                socket.emit('error', 'Failed to get status');
             }
         });
 
         socket.on('disconnect_whatsapp', async () => {
             try {
-                if (whatsappHandler) {
-                    await whatsappHandler.disconnect();
-                    whatsappHandler = null;
+                const handler = whatsappHandlers.get(socket.id);
+                if (handler) {
+                    console.log('🔌 Disconnecting WhatsApp for socket:', socket.id);
+                    await handler.disconnect();
+                    whatsappHandlers.delete(socket.id);
                 }
                 socket.emit('status_update', 'WhatsApp disconnected');
             } catch (error) {
-                console.error('❌ Error disconnecting WhatsApp:', error);
+                console.error('❌ Error disconnecting WhatsApp for socket', socket.id + ':', error);
                 socket.emit('error', error.message);
             }
         });
 
-        socket.on('disconnect', () => {
+        socket.on('disconnect', async () => {
             console.log('👋 User disconnected:', socket.id);
-            activeConnections.delete(socket.id);
+            
+            try {
+                // Clean up WhatsApp handler
+                const handler = whatsappHandlers.get(socket.id);
+                if (handler) {
+                    console.log('🧹 Cleaning up WhatsApp handler for socket:', socket.id);
+                    await handler.cleanup();
+                    whatsappHandlers.delete(socket.id);
+                }
+                
+                activeConnections.delete(socket.id);
+            } catch (error) {
+                console.error('❌ Error during disconnect cleanup for socket', socket.id + ':', error);
+            }
         });
     });
 
     // --- Express Routes ---
     app.get('/health', (req, res) =>
-        res.json({ status: 'ok', timestamp: new Date().toISOString() })
+        res.json({ 
+            status: 'ok', 
+            timestamp: new Date().toISOString(),
+            activeConnections: activeConnections.size,
+            activeHandlers: whatsappHandlers.size
+        })
     );
 
     // Serve the main WhatsApp connector interface
@@ -361,7 +453,7 @@ try {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WhatsApp Connector - Bitrix24</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -488,6 +580,9 @@ try {
             transition: all 0.3s ease;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
         
         .btn-primary {
@@ -604,12 +699,23 @@ try {
             border-top: 3px solid #25D366;
             border-radius: 50%;
             animation: spin 1s linear infinite;
-            margin-right: 10px;
         }
         
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
+        }
+
+        .debug-log {
+            background: #1e1e1e;
+            color: #00ff00;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            margin: 15px 0;
         }
     </style>
 </head>
@@ -621,6 +727,11 @@ try {
         </div>
         
         <div class="content">
+            <!-- Debug Log -->
+            <div class="debug-log" id="debugLog">
+                <div>🔧 Debug Log - Ready</div>
+            </div>
+
             <!-- Step 1: Configuration -->
             <div class="step active" id="step1">
                 <div class="step-header">
@@ -636,7 +747,7 @@ try {
                         <label for="accessToken">Access Token</label>
                         <input type="text" id="accessToken" placeholder="Your access token" />
                     </div>
-                    <button class="btn btn-primary" onclick="initializeConnection()">
+                    <button class="btn btn-primary" onclick="initializeConnection()" id="connectBtn">
                         <span id="connectText">Connect</span>
                         <div class="loading hidden" id="connectLoading"></div>
                     </button>
@@ -652,7 +763,7 @@ try {
                 </div>
                 <div id="qrContainer" class="qr-container hidden">
                     <div class="qr-code">
-                        <canvas id="qrCode"></canvas>
+                        <div id="qrCode" style="width: 256px; height: 256px; margin: 0 auto;"></div>
                     </div>
                     <div class="qr-instructions">
                         <strong>📱 How to scan:</strong><br>
@@ -697,54 +808,91 @@ try {
     </div>
 
     <script>
-        const socket = io();
+        // Debug logging function
+        function debugLog(message) {
+            const debugElement = document.getElementById('debugLog');
+            const timestamp = new Date().toLocaleTimeString();
+            debugElement.innerHTML += \`<div>[\${timestamp}] \${message}</div>\`;
+            debugElement.scrollTop = debugElement.scrollHeight;
+            console.log(\`[DEBUG] \${message}\`);
+        }
+
+        // Initialize Socket.IO
+        let socket;
         let isConnected = false;
         
-        // Socket event handlers
-        socket.on('connect', () => {
-            console.log('Connected to server');
-            updateStatus('configStatus', 'Connected to server', 'success');
-        });
-        
-        socket.on('qr_code', (qr) => {
-            console.log('QR Code received');
-            displayQRCode(qr);
-            activateStep(2);
-            updateStatus('whatsappStatus', 'QR Code received. Please scan with your phone.', 'info');
-        });
-        
-        socket.on('status_update', (status) => {
-            console.log('Status update:', status);
-            updateStatus('whatsappStatus', status, 'info');
+        // Initialize socket connection
+        function initSocket() {
+            debugLog('🔌 Initializing Socket.IO connection...');
+            socket = io();
             
-            if (status.includes('Connected')) {
+            socket.on('connect', () => {
+                debugLog('✅ Connected to server - Socket ID: ' + socket.id);
+                updateStatus('configStatus', 'Connected to server', 'success');
+            });
+            
+            socket.on('disconnect', () => {
+                debugLog('❌ Disconnected from server');
+                updateStatus('configStatus', 'Disconnected from server', 'error');
+            });
+            
+            socket.on('qr_code', (qr) => {
+                debugLog('📱 QR Code received - Length: ' + qr.length);
+                console.log('QR Data:', qr.substring(0, 100) + '...');
+                displayQRCode(qr);
+                activateStep(2);
+                updateStatus('whatsappStatus', 'QR Code received. Please scan with your phone.', 'info');
+            });
+            
+            socket.on('status_update', (status) => {
+                debugLog('📊 Status update: ' + status);
+                updateStatus('whatsappStatus', status, 'info');
+                
+                if (status.includes('Connected')) {
+                    isConnected = true;
+                    updateConnectionStatus();
+                    activateStep(3);
+                }
+            });
+            
+            socket.on('whatsapp_connected', () => {
+                debugLog('🎉 WhatsApp connected successfully!');
+                isConnected = true;
+                updateStatus('whatsappStatus', '✅ WhatsApp connected successfully!', 'success');
+                document.getElementById('whatsappConnectionStatus').textContent = '✅ Connected';
                 updateConnectionStatus();
                 activateStep(3);
-            }
-        });
+            });
+            
+            socket.on('message_received', (messageData) => {
+                debugLog('📨 Message received from: ' + messageData.userName);
+                const current = parseInt(document.getElementById('messagesProcessed').textContent);
+                document.getElementById('messagesProcessed').textContent = current + 1;
+            });
+            
+            socket.on('error', (error) => {
+                debugLog('❌ Socket error: ' + error);
+                updateStatus('configStatus', \`Error: \${error}\`, 'error');
+                hideLoading();
+            });
+
+            socket.on('status_response', (status) => {
+                debugLog('📋 Status response received');
+                console.log('Status response:', status);
+                
+                if (status.whatsappConnected) {
+                    document.getElementById('whatsappConnectionStatus').textContent = '✅ Connected';
+                } else {
+                    document.getElementById('whatsappConnectionStatus').textContent = '❌ Disconnected';
+                }
+                
+                if (status.activeSessions !== undefined) {
+                    document.getElementById('activeSessions').textContent = status.activeSessions;
+                }
+            });
+        }
         
-        socket.on('whatsapp_connected', () => {
-            console.log('WhatsApp connected successfully!');
-            isConnected = true;
-            updateStatus('whatsappStatus', '✅ WhatsApp connected successfully!', 'success');
-            document.getElementById('whatsappConnectionStatus').textContent = '✅ Connected';
-            updateConnectionStatus();
-        });
-        
-        socket.on('message_received', (messageData) => {
-            console.log('Message received:', messageData);
-            // Update message counter
-            const current = parseInt(document.getElementById('messagesProcessed').textContent);
-            document.getElementById('messagesProcessed').textContent = current + 1;
-        });
-        
-        socket.on('error', (error) => {
-            console.error('Socket error:', error);
-            updateStatus('configStatus', \`Error: \${error}\`, 'error');
-            hideLoading();
-        });
-        
-        // Functions
+        // Initialize connection
         function initializeConnection() {
             const domain = document.getElementById('domain').value.trim();
             const accessToken = document.getElementById('accessToken').value.trim();
@@ -753,6 +901,10 @@ try {
                 updateStatus('configStatus', 'Please fill in both domain and access token', 'error');
                 return;
             }
+            
+            debugLog('🔄 Initializing WhatsApp connection...');
+            debugLog('Domain: ' + domain);
+            debugLog('Token: ' + accessToken.substring(0, 10) + '...');
             
             showLoading();
             updateStatus('configStatus', 'Initializing connection...', 'info');
@@ -765,18 +917,60 @@ try {
             document.getElementById('bitrixConnectionStatus').textContent = '✅ Connected';
         }
         
+        // QR Code display function - Fixed version
         function displayQRCode(qrData) {
-            const canvas = document.getElementById('qrCode');
-            QRCode.toCanvas(canvas, qrData, {
-                width: 256,
-                margin: 2,
-                color: {
-                    dark: '#000000',
-                    light: '#FFFFFF'
-                }
-            });
+            debugLog('🖼️ Rendering QR Code...');
             
-            document.getElementById('qrContainer').classList.remove('hidden');
+            try {
+                // Clear previous QR code
+                const qrElement = document.getElementById('qrCode');
+                qrElement.innerHTML = '';
+                
+                // Create QR code using qrcode-generator library
+                const qr = qrcode(0, 'M');
+                qr.addData(qrData);
+                qr.make();
+                
+                // Create the QR code as HTML table (more reliable than canvas)
+                const cellSize = 4;
+                const margin = 4;
+                const size = qr.getModuleCount();
+                const totalSize = (size + 2 * margin) * cellSize;
+                
+                let html = \`<div style="width: \${totalSize}px; height: \${totalSize}px; background: white; margin: 0 auto;">\`;
+                
+                for (let row = -margin; row < size + margin; row++) {
+                    for (let col = -margin; col < size + margin; col++) {
+                        const isDark = (row >= 0 && row < size && col >= 0 && col < size) ? qr.isDark(row, col) : false;
+                        const color = isDark ? '#000000' : '#FFFFFF';
+                        html += \`<div style="width: \${cellSize}px; height: \${cellSize}px; background: \${color}; display: inline-block; vertical-align: top;"></div>\`;
+                    }
+                    html += '<br>';
+                }
+                html += '</div>';
+                
+                qrElement.innerHTML = html;
+                
+                // Show the QR container
+                document.getElementById('qrContainer').classList.remove('hidden');
+                
+                debugLog('✅ QR Code rendered successfully');
+                
+            } catch (error) {
+                debugLog('❌ QR Code rendering failed: ' + error.message);
+                console.error('QR Code Error:', error);
+                
+                // Fallback: show QR data as text
+                const qrElement = document.getElementById('qrCode');
+                qrElement.innerHTML = \`
+                    <div style="padding: 20px; background: #f0f0f0; border-radius: 8px;">
+                        <p><strong>QR Code Data (for manual entry):</strong></p>
+                        <textarea readonly style="width: 100%; height: 100px; font-family: monospace; font-size: 10px;">\${qrData}</textarea>
+                        <p><small>Copy this text and use a QR code generator if the QR code doesn't appear</small></p>
+                    </div>
+                \`;
+                document.getElementById('qrContainer').classList.remove('hidden');
+            }
         }
         
         function updateStatus(elementId, message, type) {
@@ -785,6 +979,8 @@ try {
         }
         
         function activateStep(stepNumber) {
+            debugLog('📍 Activating step: ' + stepNumber);
+            
             // Remove active class from all steps
             document.querySelectorAll('.step').forEach(step => {
                 step.classList.remove('active');
@@ -797,31 +993,24 @@ try {
         function showLoading() {
             document.getElementById('connectLoading').classList.remove('hidden');
             document.getElementById('connectText').textContent = 'Connecting...';
+            document.getElementById('connectBtn').disabled = true;
         }
         
         function hideLoading() {
             document.getElementById('connectLoading').classList.add('hidden');
             document.getElementById('connectText').textContent = 'Connect';
+            document.getElementById('connectBtn').disabled = false;
         }
         
         function updateConnectionStatus() {
-            socket.emit('get_status');
+            if (socket) {
+                socket.emit('get_status');
+            }
         }
-        
-        socket.on('status_response', (status) => {
-            console.log('Status response:', status);
-            
-            if (status.whatsappConnected) {
-                document.getElementById('whatsappConnectionStatus').textContent = '✅ Connected';
-            }
-            
-            if (status.activeSessions !== undefined) {
-                document.getElementById('activeSessions').textContent = status.activeSessions;
-            }
-        });
         
         function disconnectWhatsApp() {
             if (confirm('Are you sure you want to disconnect WhatsApp?')) {
+                debugLog('🔌 Disconnecting WhatsApp...');
                 socket.emit('disconnect_whatsapp');
                 isConnected = false;
                 document.getElementById('whatsappConnectionStatus').textContent = '❌ Disconnected';
@@ -832,44 +1021,72 @@ try {
         }
         
         // Auto-fill domain if available from URL params
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.get('domain')) {
-            document.getElementById('domain').value = urlParams.get('domain');
-        }
-        if (urlParams.get('access_token')) {
-            document.getElementById('accessToken').value = urlParams.get('access_token');
+        function loadUrlParams() {
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('domain')) {
+                document.getElementById('domain').value = urlParams.get('domain');
+                debugLog('🔗 Domain loaded from URL: ' + urlParams.get('domain'));
+            }
+            if (urlParams.get('access_token')) {
+                document.getElementById('accessToken').value = urlParams.get('access_token');
+                debugLog('🔗 Access token loaded from URL');
+            }
         }
         
-        // Update status every 30 seconds
-        setInterval(() => {
-            if (isConnected) {
-                updateConnectionStatus();
-            }
-        }, 30000);
+        // Initialize everything when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            debugLog('🚀 Page loaded, initializing...');
+            loadUrlParams();
+            initSocket();
+            
+            // Update status every 30 seconds
+            setInterval(() => {
+                if (isConnected && socket) {
+                    updateConnectionStatus();
+                }
+            }, 30000);
+        });
     </script>
 </body>
-</html>`;
+</html>\`;
     }
 
     // --- Start Server ---
     server.listen(PORT, () => {
-        console.log(`✅✅✅ Application started successfully! ✅✅✅`);
-        console.log(`🚀 Server running on port ${PORT}`);
-        console.log(`📡 Socket.IO enabled`);
-        console.log(`🌐 Access at: ${BASE_URL}`);
-        console.log(`🔐 OAuth scopes: ${APP_SCOPE}`);
-        console.log(`📱 WhatsApp Interface: ${BASE_URL}/app`);
+        console.log(\`✅✅✅ Application started successfully! ✅✅✅\`);
+        console.log(\`🚀 Server running on port \${PORT}\`);
+        console.log(\`📡 Socket.IO enabled\`);
+        console.log(\`🌐 Access at: \${BASE_URL}\`);
+        console.log(\`🔐 OAuth scopes: \${APP_SCOPE}\`);
+        console.log(\`📱 WhatsApp Interface: \${BASE_URL}/app\`);
+        console.log(\`👤 Active connections: \${activeConnections.size}\`);
+        console.log(\`🤖 Active handlers: \${whatsappHandlers.size}\`);
     });
 
     // --- Graceful Shutdown ---
     const gracefulShutdown = async (signal) => {
-        console.log(`🛑 ${signal} received, shutting down gracefully`);
-        if (whatsappHandler) await whatsappHandler.cleanup();
+        console.log(\`🛑 \${signal} received, shutting down gracefully\`);
+        
+        // Clean up all WhatsApp handlers
+        console.log(\`🧹 Cleaning up \${whatsappHandlers.size} WhatsApp handlers...\`);
+        for (const [socketId, handler] of whatsappHandlers.entries()) {
+            try {
+                await handler.cleanup();
+                console.log(\`✅ Handler for socket \${socketId} cleaned up\`);
+            } catch (error) {
+                console.error(\`❌ Error cleaning up handler for socket \${socketId}:\`, error);
+            }
+        }
+        
+        whatsappHandlers.clear();
+        activeConnections.clear();
+        
         server.close(() => {
             console.log('✅ Server closed');
             process.exit(0);
         });
     };
+    
     process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
     process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
