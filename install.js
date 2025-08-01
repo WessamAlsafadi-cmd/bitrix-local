@@ -583,7 +583,7 @@ try {
         function debugLog(message) {
             const debugElement = document.getElementById('debugLog');
             const timestamp = new Date().toLocaleTimeString();
-            debugElement.innerHTML += \`<div>[${timestamp}] ${message}</div>\`;
+            debugElement.innerHTML += `<div>[${timestamp}] ${message}</div>`;
             debugElement.scrollTop = debugElement.scrollHeight;
             console.log(`[DEBUG] ${message}`);
         }
