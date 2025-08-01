@@ -797,7 +797,7 @@ try {
                 </div>
                 <div id="qrContainer" class="qr-container hidden">
                     <div class="qr-code">
-                        <canvas id="qrCode"></canvas>
+                        <canvas id="qrCode" width="256" height="256"></canvas>
                     </div>
                     <div class="qr-instructions">
                         <strong>📱 How to scan:</strong><br>
@@ -874,9 +874,14 @@ try {
             socket.on('qr_code', (qr) => {
                 debugLog('📱 QR Code received - Length: ' + qr.length);
                 console.log('QR Data:', qr.substring(0, 100) + '...');
-                displayQRCode(qr);
-                activateStep(2);
-                updateStatus('whatsappStatus', 'QR Code received. Please scan with your phone.', 'info');
+                try {
+                    displayQRCode(qr);
+                    activateStep(2);
+                    updateStatus('whatsappStatus', 'QR Code received. Please scan with your phone.', 'info');
+                } catch (error) {
+                    debugLog('❌ Error displaying QR code: ' + error.message);
+                    updateStatus('whatsappStatus', 'Error displaying QR code: ' + error.message, 'error');
+                }
             });
             
             socket.on('status_update', (status) => {
@@ -934,19 +939,46 @@ try {
         }
 
         function displayQRCode(qrData) {
+            debugLog('📱 Attempting to render QR code...');
             const canvas = document.getElementById('qrCode');
-            QRCode.toCanvas(canvas, qrData, {
-                width: 256,
-                margin: 2,
-                color: {
-                    dark: '#000000',
-                    light: '#FFFFFF'
-                }
-            });
-            document.getElementById('qrContainer').classList.remove('hidden');
+            if (!canvas) {
+                debugLog('❌ Canvas element not found');
+                throw new Error('Canvas element not found');
+            }
+
+            // Clear previous content
+            const context = canvas.getContext('2d');
+            context.clearRect(0, 0, canvas.width, canvas.height);
+
+            try {
+                QRCode.toCanvas(canvas, qrData, {
+                    width: 256,
+                    margin: 2,
+                    color: {
+                        dark: '#000000',
+                        light: '#FFFFFF'
+                    }
+                }, (error) => {
+                    if (error) {
+                        debugLog('❌ QRCode.toCanvas error: ' + error.message);
+                        throw error;
+                    }
+                    debugLog('✅ QR code rendered successfully');
+                });
+
+                // Ensure QR container is visible
+                const qrContainer = document.getElementById('qrContainer');
+                qrContainer.classList.remove('hidden');
+                qrContainer.style.display = 'block'; // Force visibility
+                debugLog('✅ QR container made visible');
+            } catch (error) {
+                debugLog('❌ Error rendering QR code: ' + error.message);
+                throw error;
+            }
         }
 
         function activateStep(stepNumber) {
+            debugLog('🔄 Activating step ' + stepNumber);
             document.querySelectorAll('.step').forEach(step => step.classList.remove('active'));
             document.getElementById(\`step\${stepNumber}\`).classList.add('active');
         }
@@ -980,6 +1012,7 @@ try {
             
             if (!domain || !accessToken) {
                 updateStatus('configStatus', 'Please fill in both domain and access token', 'error');
+                debugLog('❌ Missing domain or access token');
                 return;
             }
 
@@ -995,6 +1028,7 @@ try {
         function disconnectWhatsApp() {
             if (!isConnected) {
                 updateStatus('whatsappStatus', 'Not connected', 'info');
+                debugLog('❌ Disconnect attempted but not connected');
                 return;
             }
 
@@ -1014,13 +1048,16 @@ try {
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('domain')) {
             document.getElementById('domain').value = urlParams.get('domain');
+            debugLog('📋 Auto-filled domain: ' + urlParams.get('domain'));
         }
         if (urlParams.get('access_token')) {
             document.getElementById('accessToken').value = urlParams.get('access_token');
+            debugLog('📋 Auto-filled access token');
         }
 
         // Initialize socket connection on page load
         window.onload = () => {
+            debugLog('🖥️ Page loaded, initializing socket...');
             initSocket();
             socket.emit('get_status');
         };
@@ -1028,6 +1065,7 @@ try {
         // Update status every 30 seconds
         setInterval(() => {
             if (isConnected) {
+                debugLog('🔄 Periodic status update');
                 updateConnectionStatus();
             }
         }, 30000);
