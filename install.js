@@ -347,43 +347,180 @@ try {
     });
 
     app.get('/install.js', (req, res) => {
-        const { DOMAIN } = req.query;
-        if (!DOMAIN) {
-            return res.status(400).send('<h2>Installation Error</h2><p>Missing DOMAIN parameter.</p>');
+    console.log('📦 Install.js route accessed');
+    console.log('📋 Query params:', req.query);
+    console.log('📋 Headers:', req.headers);
+    console.log('📋 Referer:', req.headers.referer);
+    
+    // Extract domain from referer header (this is how we can get the Bitrix24 domain)
+    let domain = req.query.DOMAIN || req.query.domain;
+    
+    if (!domain && req.headers.referer) {
+        // Extract domain from referer URL
+        try {
+            const refererUrl = new URL(req.headers.referer);
+            domain = refererUrl.hostname;
+            console.log('🔍 Extracted domain from referer:', domain);
+        } catch (e) {
+            console.log('❌ Could not parse referer URL');
         }
-        
-        console.log('🔐 Creating OAuth URL with scopes:', APP_SCOPE);
-        
-        const authUrl = `https://${DOMAIN}/oauth/authorize/?` + querystring.stringify({
-            client_id: APP_ID,
-            response_type: 'code',
-            scope: APP_SCOPE,
-            redirect_uri: `${BASE_URL}/oauth/callback`
-        });
-        
-        console.log('🌐 OAuth URL:', authUrl);
-        res.send(`<script>window.location.href = '${authUrl}';</script>`);
-    });
-
-    app.post('/install.js', async (req, res) => {
-    console.log('📦 POST Installation requested. Redirecting to OAuth flow to ensure a clean install.');
-    const { DOMAIN } = req.body;
-
-    if (!DOMAIN) {
-        return res.status(400).send('<h2>Installation Error</h2><p>Missing DOMAIN parameter.</p>');
     }
-
-    // This is the same URL from your /install GET route.
-    // We are now forcing the POST route to use the proper OAuth flow.
-    const authUrl = `https://${DOMAIN}/oauth/authorize/?` + querystring.stringify({
-        client_id: APP_ID,
+    
+    if (!domain) {
+        // Show a form to manually enter domain
+        return res.send(getBitrix24DomainFormHTML());
+    }
+    
+    console.log('🔐 Creating OAuth URL for domain:', domain);
+    console.log('🔐 Using APP_ID:', process.env.APP_ID);
+    console.log('🔐 Using scopes:', APP_SCOPE);
+    
+    const authUrl = `https://${domain}/oauth/authorize/?` + querystring.stringify({
+        client_id: process.env.APP_ID,
         response_type: 'code',
         scope: APP_SCOPE,
-        redirect_uri: `${BASE_URL}/oauth/callback`
+        redirect_uri: `${process.env.BASE_URL}/oauth/callback`
     });
+    
+    console.log('🌐 OAuth URL:', authUrl);
+    
+    // Return HTML that redirects to OAuth
+    res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Installing WhatsApp Connector</title>
+        <style>
+            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+            .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #25D366; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 20px auto; }
+            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        </style>
+    </head>
+    <body>
+        <h2>📱 Installing WhatsApp Connector</h2>
+        <div class="spinner"></div>
+        <p>Domain: <strong>${domain}</strong></p>
+        <p>Redirecting to Bitrix24 authorization...</p>
+        <script>
+            console.log('Redirecting to:', '${authUrl}');
+            window.location.href = '${authUrl}';
+        </script>
+    </body>
+    </html>
+    `);
+});
 
-    // Redirect the user's browser to the authorization page.
+    app.post('/install.js', (req, res) => {
+    console.log('📦 POST Install.js route accessed');
+    console.log('📋 Body:', req.body);
+    
+    const domain = req.body.domain || req.body.DOMAIN;
+    
+    if (!domain) {
+        return res.status(400).send('<h2>Error</h2><p>Missing domain parameter.</p>');
+    }
+    
+    const authUrl = `https://${domain}/oauth/authorize/?` + querystring.stringify({
+        client_id: process.env.APP_ID,
+        response_type: 'code',
+        scope: APP_SCOPE,
+        redirect_uri: `${process.env.BASE_URL}/oauth/callback`
+    });
+    
     res.redirect(authUrl);
+});
+
+// 4. Update the /app route to handle the main application
+app.get('/app', (req, res) => {
+    console.log('🎯 App route accessed');
+    console.log('📋 Query params:', req.query);
+    console.log('📋 Headers:', req.headers);
+    
+    const domain = req.query.domain || req.query.DOMAIN;
+    const accessToken = req.query.access_token || req.query.AUTH_ID;
+    const isEmbedded = req.headers['x-bitrix24-domain'] || domain;
+    
+    if (isEmbedded) {
+        // This is being loaded inside Bitrix24
+        res.send(getBitrix24EmbeddedHTML());
+    } else {
+        // This is standalone access
+        res.send(getWhatsAppConnectorHTML());
+    }
+});
+
+// 5. Add a domain form for manual entry
+function getBitrix24DomainFormHTML() {
+    return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>WhatsApp Connector - Enter Domain</title>
+        <style>
+            body { font-family: Arial, sans-serif; max-width: 500px; margin: 100px auto; padding: 20px; }
+            .form { background: #f8f9fa; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+            input { width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #ddd; border-radius: 5px; font-size: 16px; }
+            button { background: #25D366; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; }
+            button:hover { background: #128C7E; }
+            .help { background: #e3f2fd; padding: 15px; border-radius: 5px; margin: 15px 0; }
+        </style>
+    </head>
+    <body>
+        <div class="form">
+            <h2>📱 WhatsApp Connector</h2>
+            <p>Please enter your Bitrix24 domain to continue installation:</p>
+            
+            <form method="POST" action="/install.js">
+                <input type="text" name="domain" placeholder="yourcompany.bitrix24.com" required>
+                <button type="submit">Continue Installation</button>
+            </form>
+            
+            <div class="help">
+                <strong>💡 How to find your domain:</strong><br>
+                Look at your Bitrix24 URL. If it's <code>https://mycompany.bitrix24.com</code>, 
+                then enter <code>mycompany.bitrix24.com</code>
+            </div>
+        </div>
+        
+        <script>
+            // Try to auto-detect domain from referrer
+            if (document.referrer) {
+                try {
+                    const url = new URL(document.referrer);
+                    if (url.hostname.includes('bitrix24')) {
+                        document.querySelector('input[name="domain"]').value = url.hostname;
+                    }
+                } catch (e) {
+                    console.log('Could not auto-detect domain');
+                }
+            }
+        </script>
+    </body>
+    </html>
+    `;
+}
+
+// 6. Add debug route to help troubleshoot
+app.get('/debug-install', (req, res) => {
+    res.json({
+        timestamp: new Date().toISOString(),
+        environment: {
+            APP_ID: process.env.APP_ID,
+            BASE_URL: process.env.BASE_URL,
+            NODE_ENV: process.env.NODE_ENV
+        },
+        request: {
+            method: req.method,
+            url: req.url,
+            query: req.query,
+            headers: {
+                'user-agent': req.headers['user-agent'],
+                'referer': req.headers.referer,
+                'x-bitrix24-domain': req.headers['x-bitrix24-domain'],
+                'host': req.headers.host
+            }
+        }
+    });
 });
 
 
