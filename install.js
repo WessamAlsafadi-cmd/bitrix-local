@@ -366,68 +366,76 @@ try {
     });
 
     app.post('/install.js', async (req, res) => {
-        console.log('📦 POST Installation requested');
-        console.log('📋 Body:', req.body);
-        try {
-            const { DOMAIN, AUTH_ID } = req.body;
-            let targetDomain = DOMAIN || (req.headers.origin && req.headers.origin.match(/https?:\/\/([^\/]+)/) ? req.headers.origin.match(/https?:\/\/([^\/]+)/)[1] : null);
+    console.log('📦 POST Installation requested. Redirecting to OAuth flow to ensure a clean install.');
+    const { DOMAIN } = req.body;
 
-            if (!AUTH_ID) {
-                return res.status(400).json({ error: 'Missing AUTH_ID' });
-            }
+    if (!DOMAIN) {
+        return res.status(400).send('<h2>Installation Error</h2><p>Missing DOMAIN parameter.</p>');
+    }
 
-            const customApp = new CustomChannelApp(targetDomain, AUTH_ID);
-            const installResult = await customApp.install();
-
-            if (installResult.success) {
-                res.json({ success: true, message: 'Installation successful - App should now appear in Bitrix24!', result: installResult });
-            } else {
-                res.json({ success: false, error: installResult.error, message: installResult.message, domain: targetDomain });
-            }
-        } catch (error) {
-            console.error('❌ Installation handler error:', error);
-            res.status(500).json({ error: error.message });
-        }
+    // This is the same URL from your /install GET route.
+    // We are now forcing the POST route to use the proper OAuth flow.
+    const authUrl = `https://${DOMAIN}/oauth/authorize/?` + querystring.stringify({
+        client_id: APP_ID,
+        response_type: 'code',
+        scope: APP_SCOPE,
+        redirect_uri: `${BASE_URL}/oauth/callback`
     });
+
+    // Redirect the user's browser to the authorization page.
+    res.redirect(authUrl);
+});
+
 
     app.get('/oauth/callback', async (req, res) => {
-        console.log('🔐 OAuth callback received');
-        try {
-            const { code, domain } = req.query;
-            if (!code || !domain) throw new Error('Missing code or domain');
+    console.log('🔐 OAuth callback received. This is the primary installation path.');
+    try {
+        const { code, domain } = req.query;
+        if (!code || !domain) throw new Error('Missing code or domain in OAuth callback');
 
-            console.log('🔄 Exchanging code for token with scopes:', APP_SCOPE);
+        console.log('🔄 Exchanging code for token...');
 
-            const tokenData = {
-                grant_type: 'authorization_code',
-                client_id: APP_ID,
-                client_secret: APP_SECRET,
-                code: code,
-                scope: APP_SCOPE
-            };
+        const tokenData = {
+            grant_type: 'authorization_code',
+            client_id: APP_ID,
+            client_secret: APP_SECRET,
+            code: code,
+            scope: APP_SCOPE
+        };
 
-            const tokenResponse = await axios.post(`https://${domain}/oauth/token/`, querystring.stringify(tokenData));
-            const { access_token, scope } = tokenResponse.data;
+        const tokenResponse = await axios.post(`https://${domain}/oauth/token/`, querystring.stringify(tokenData));
+        const { access_token } = tokenResponse.data;
 
-            if (!access_token) throw new Error('Failed to obtain access token');
+        if (!access_token) throw new Error('Failed to obtain access token from Bitrix24');
 
-            console.log('✅ Received access token with scope:', scope);
+        console.log('✅ Access token received. Now running final installation logic...');
 
-            const customApp = new CustomChannelApp(domain, access_token);
-            const installResult = await customApp.install();
+        // CRITICAL: Use the NEW access_token to install the app and bind placements.
+        const customApp = new CustomChannelApp(domain, access_token);
+        const installResult = await customApp.install();
 
-            // Redirect to the app interface with the access token
-            res.redirect(`/app?domain=${domain}&access_token=${access_token}&installation=success`);
-
-        } catch (error) {
-            console.error('❌ OAuth callback error:', error);
-            let errorMessage = error.message;
-            if (error.response && error.response.data) {
-                errorMessage += ` - ${JSON.stringify(error.response.data)}`;
-            }
-            res.status(500).send(`<h2>Installation Error</h2><p>${errorMessage}</p>`);
+        // Check if the background installation was successful before redirecting.
+        if (!installResult.success) {
+            console.error('❌ Background installation failed.', installResult.error);
+            // Even if it fails, we send the user to the app so they don't get stuck.
+            // The app's own error handling can take over.
         }
-    });
+
+        console.log('✅ Installation logic complete. Redirecting user to the main application UI...');
+
+        // THIS IS THE KEY: We redirect the user's browser to the /app route.
+        // The browser's final location will be your application's interface.
+        res.redirect(`/app?domain=${domain}&access_token=${access_token}&installation=success`);
+
+    } catch (error) {
+        console.error('❌ Critical OAuth callback error:', error);
+        let errorMessage = error.message;
+        if (error.response && error.response.data) {
+            errorMessage += ` - ${JSON.stringify(error.response.data)}`;
+        }
+        res.status(500).send(`<h2>Installation Error</h2><p>${errorMessage}</p>`);
+    }
+});
 
     // HTML Template Functions
     function getAppWidgetHTML() {
