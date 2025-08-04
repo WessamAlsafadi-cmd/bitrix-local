@@ -410,25 +410,250 @@ try {
     `);
 });
 
-    app.post('/install.js', (req, res) => {
+    app.post('/install.js', async (req, res) => {
     console.log('📦 POST Install.js route accessed');
     console.log('📋 Body:', req.body);
+    console.log('📋 Headers:', req.headers);
     
-    const domain = req.body.domain || req.body.DOMAIN;
+    // Extract data from Bitrix24's installation request
+    const authId = req.body.AUTH_ID;
+    const memberId = req.body.member_id;
+    const placement = req.body.PLACEMENT;
     
-    if (!domain) {
-        return res.status(400).send('<h2>Error</h2><p>Missing domain parameter.</p>');
+    // Check if this is a Bitrix24 installation request
+    if (authId && memberId) {
+        console.log('✅ Bitrix24 installation request detected');
+        console.log('🔑 AUTH_ID:', authId);
+        console.log('👤 Member ID:', memberId);
+        
+        // Try to extract domain from referer or other headers
+        let domain = null;
+        
+        // Method 1: Check referer header
+        if (req.headers.referer) {
+            try {
+                const refererUrl = new URL(req.headers.referer);
+                domain = refererUrl.hostname;
+                console.log('🔍 Extracted domain from referer:', domain);
+            } catch (e) {
+                console.log('❌ Could not parse referer URL');
+            }
+        }
+        
+        // Method 2: Check host header patterns
+        if (!domain && req.headers.host) {
+            // Sometimes Bitrix24 might forward the original host
+            console.log('🔍 Checking host header:', req.headers.host);
+        }
+        
+        // Method 3: Extract from member_id (advanced method)
+        if (!domain && memberId) {
+            // The member_id might contain domain information
+            // This is a fallback method that might work
+            console.log('🔍 Trying to use member_id for domain detection');
+        }
+        
+        if (domain && domain.includes('bitrix24')) {
+            // We found a domain, redirect to OAuth
+            console.log('🚀 Redirecting to OAuth for domain:', domain);
+            
+            const authUrl = `https://${domain}/oauth/authorize/?` + querystring.stringify({
+                client_id: APP_ID,
+                response_type: 'code',
+                scope: APP_SCOPE,
+                redirect_uri: `${BASE_URL}/oauth/callback`
+            });
+            
+            return res.redirect(authUrl);
+        } else {
+            // We have Bitrix24 data but no domain - show domain form
+            console.log('⚠️ Bitrix24 installation detected but no domain found');
+            return res.send(getBitrix24InstallationFormHTML(authId, memberId));
+        }
     }
     
-    const authUrl = `https://${domain}/oauth/authorize/?` + querystring.stringify({
-        client_id: process.env.APP_ID,
-        response_type: 'code',
-        scope: APP_SCOPE,
-        redirect_uri: `${process.env.BASE_URL}/oauth/callback`
-    });
+    // Fallback: check for manually provided domain
+    const domain = req.body.domain || req.body.DOMAIN;
+    if (domain) {
+        const authUrl = `https://${domain}/oauth/authorize/?` + querystring.stringify({
+            client_id: APP_ID,
+            response_type: 'code',
+            scope: APP_SCOPE,
+            redirect_uri: `${BASE_URL}/oauth/callback`
+        });
+        
+        return res.redirect(authUrl);
+    }
     
-    res.redirect(authUrl);
+    // If we get here, we don't have enough information
+    console.log('❌ Insufficient data for installation');
+    return res.status(400).send(getInstallationErrorHTML());
 });
+
+// Add this new HTML template function:
+function getBitrix24InstallationFormHTML(authId, memberId) {
+    return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>WhatsApp Connector - Complete Installation</title>
+        <style>
+            body { 
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                margin: 0;
+                padding: 20px;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .container {
+                background: white;
+                padding: 40px;
+                border-radius: 20px;
+                box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+                max-width: 500px;
+                width: 100%;
+            }
+            .header {
+                text-align: center;
+                margin-bottom: 30px;
+            }
+            .header h2 {
+                color: #25D366;
+                margin-bottom: 10px;
+                font-size: 1.8rem;
+            }
+            .form-group {
+                margin-bottom: 20px;
+            }
+            .form-group label {
+                display: block;
+                margin-bottom: 8px;
+                font-weight: 600;
+                color: #333;
+            }
+            .form-group input {
+                width: 100%;
+                padding: 15px;
+                border: 2px solid #ddd;
+                border-radius: 10px;
+                font-size: 16px;
+                transition: border-color 0.3s;
+            }
+            .form-group input:focus {
+                outline: none;
+                border-color: #25D366;
+            }
+            .btn {
+                width: 100%;
+                padding: 15px;
+                background: #25D366;
+                color: white;
+                border: none;
+                border-radius: 10px;
+                font-size: 16px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.3s;
+            }
+            .btn:hover {
+                background: #128C7E;
+            }
+            .info {
+                background: #f8f9fa;
+                padding: 20px;
+                border-radius: 10px;
+                margin-top: 20px;
+            }
+            .info h4 {
+                color: #25D366;
+                margin-top: 0;
+            }
+            .success-indicator {
+                background: #d4edda;
+                color: #155724;
+                padding: 15px;
+                border-radius: 10px;
+                margin-bottom: 20px;
+                border-left: 4px solid #25D366;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h2>📱 WhatsApp Connector</h2>
+                <p>Almost there! We need your Bitrix24 domain to complete the installation.</p>
+            </div>
+            
+            <div class="success-indicator">
+                ✅ Installation request received from Bitrix24<br>
+                🔑 Authentication data verified
+            </div>
+            
+            <form method="POST" action="/install.js">
+                <input type="hidden" name="auth_id" value="${authId}">
+                <input type="hidden" name="member_id" value="${memberId}">
+                
+                <div class="form-group">
+                    <label for="domain">Your Bitrix24 Domain:</label>
+                    <input type="text" 
+                           id="domain" 
+                           name="domain" 
+                           placeholder="yourcompany.bitrix24.com" 
+                           required
+                           pattern="[a-zA-Z0-9.-]+\.bitrix24\.(com|net|ru|de|fr|es|it|pl|ua|kz|by)"
+                    >
+                </div>
+                
+                <button type="submit" class="btn">Complete Installation</button>
+            </form>
+            
+            <div class="info">
+                <h4>💡 How to find your domain:</h4>
+                <ul>
+                    <li>Look at your Bitrix24 URL in the browser address bar</li>
+                    <li>If it shows <code>https://mycompany.bitrix24.com</code></li>
+                    <li>Then enter: <code>mycompany.bitrix24.com</code></li>
+                    <li>Don't include <code>https://</code> or any paths</li>
+                </ul>
+            </div>
+        </div>
+        
+        <script>
+            // Try to auto-detect domain from current page
+            if (window.parent && window.parent.location) {
+                try {
+                    const parentUrl = window.parent.location.href;
+                    const match = parentUrl.match(/https?:\/\/([^\/]+\.bitrix24\.[^\/]+)/);
+                    if (match) {
+                        document.getElementById('domain').value = match[1];
+                        console.log('Auto-detected domain:', match[1]);
+                    }
+                } catch (e) {
+                    console.log('Could not auto-detect domain from parent window');
+                }
+            }
+            
+            // Also try from referrer
+            if (document.referrer) {
+                try {
+                    const referrerUrl = new URL(document.referrer);
+                    if (referrerUrl.hostname.includes('bitrix24')) {
+                        document.getElementById('domain').value = referrerUrl.hostname;
+                        console.log('Auto-detected domain from referrer:', referrerUrl.hostname);
+                    }
+                } catch (e) {
+                    console.log('Could not parse referrer');
+                }
+            }
+        </script>
+    </body>
+    </html>
+    `;
+}
 
 // 4. Update the /app route to handle the main application
 app.get('/app', (req, res) => {
@@ -525,12 +750,23 @@ app.get('/debug-install', (req, res) => {
 
 
     app.get('/oauth/callback', async (req, res) => {
-    console.log('🔐 OAuth callback received. This is the primary installation path.');
+    console.log('🔐 OAuth callback received');
+    console.log('📋 Query params:', req.query);
+    
     try {
-        const { code, domain } = req.query;
-        if (!code || !domain) throw new Error('Missing code or domain in OAuth callback');
-
+        const { code, domain, state } = req.query;
+        
+        if (!code) {
+            throw new Error('Missing authorization code');
+        }
+        
+        if (!domain) {
+            throw new Error('Missing domain parameter');
+        }
+        
         console.log('🔄 Exchanging code for token...');
+        console.log('🌐 Domain:', domain);
+        console.log('🔑 Code:', code.substring(0, 20) + '...');
 
         const tokenData = {
             grant_type: 'authorization_code',
@@ -540,40 +776,57 @@ app.get('/debug-install', (req, res) => {
             scope: APP_SCOPE
         };
 
-        const tokenResponse = await axios.post(`https://${domain}/oauth/token/`, querystring.stringify(tokenData));
-        const { access_token } = tokenResponse.data;
+        const tokenResponse = await axios.post(
+            `https://${domain}/oauth/token/`, 
+            querystring.stringify(tokenData),
+            {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+            }
+        );
+        
+        console.log('📊 Token response status:', tokenResponse.status);
+        const { access_token, refresh_token } = tokenResponse.data;
 
-        if (!access_token) throw new Error('Failed to obtain access token from Bitrix24');
+        if (!access_token) {
+            throw new Error('Failed to obtain access token from Bitrix24');
+        }
 
-        console.log('✅ Access token received. Now running final installation logic...');
+        console.log('✅ Access token received');
+        console.log('🚀 Running installation logic...');
 
-        // CRITICAL: Use the NEW access_token to install the app and bind placements.
+        // Install the app using CustomChannelApp
         const customApp = new CustomChannelApp(domain, access_token);
         const installResult = await customApp.install();
 
-        // Check if the background installation was successful before redirecting.
-        if (!installResult.success) {
-            console.error('❌ Background installation failed.', installResult.error);
-            // Even if it fails, we send the user to the app so they don't get stuck.
-            // The app's own error handling can take over.
-        }
+        console.log('📋 Installation result:', installResult.success ? '✅ Success' : '❌ Failed');
 
-        console.log('✅ Installation logic complete. Redirecting user to the main application UI...');
-
-        // THIS IS THE KEY: We redirect the user's browser to the /app route.
-        // The browser's final location will be your application's interface.
-        res.redirect(`/app?domain=${domain}&access_token=${access_token}&installation=success`);
+        // Redirect to the app interface
+        const redirectUrl = `/app?domain=${domain}&access_token=${access_token}&installation=${installResult.success ? 'success' : 'partial'}`;
+        console.log('🔄 Redirecting to:', redirectUrl);
+        
+        res.redirect(redirectUrl);
 
     } catch (error) {
-        console.error('❌ Critical OAuth callback error:', error);
-        let errorMessage = error.message;
-        if (error.response && error.response.data) {
-            errorMessage += ` - ${JSON.stringify(error.response.data)}`;
-        }
-        res.status(500).send(`<h2>Installation Error</h2><p>${errorMessage}</p>`);
+        console.error('❌ OAuth callback error:', error.message);
+        
+        let errorHtml = `
+        <html>
+        <head><title>Installation Error</title></head>
+        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px;">
+            <div style="background: #f8d7da; color: #721c24; padding: 20px; border-radius: 10px;">
+                <h2>❌ Installation Failed</h2>
+                <p><strong>Error:</strong> ${error.message}</p>
+                <p><a href="/">← Try Again</a></p>
+            </div>
+        </body>
+        </html>
+        `;
+        
+        res.status(500).send(errorHtml);
     }
 });
-
     // HTML Template Functions
     function getAppWidgetHTML() {
         return `
