@@ -323,7 +323,7 @@ try {
     });
 
     app.get('/app', function(req, res) {
-        const isEmbedded = req.headers['x-bitrix24-domain'] || req.query.DOMAIN;
+        const isEmbedded = req.headers['x-bitrix24-domain'] || req.query.domain;
         if (isEmbedded) {
             res.send(getBitrix24EmbeddedHTML());
         } else {
