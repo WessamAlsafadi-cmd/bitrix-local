@@ -97,56 +97,56 @@ class WhatsAppBitrix24Handler extends EventEmitter {
      * Handle connection updates with better QR emission
      */
     handleConnectionUpdate(update) {
-        const { connection, lastDisconnect, qr } = update;
+    const { connection, lastDisconnect, qr } = update;
+    
+    console.log('🔄 Connection update at: ' + new Date().toISOString(), { connection, hasQR: !!qr, hasError: !!lastDisconnect?.error });
+    
+    if (qr) {
+        console.log('📱 QR Code received. Emitting to frontend...');
+        console.log('📱 QR Code length:', qr.length);
+        console.log('📱 QR Code preview:', qr.substring(0, 50) + '...');
         
-        console.log('🔄 Connection update:', { connection, hasQR: !!qr, hasError: !!lastDisconnect?.error });
+        // Emit QR code to frontend
+        this.emit('qr', qr);
         
-        if (qr) {
-            console.log('📱 QR Code received. Emitting to frontend...');
-            console.log('📱 QR Code length:', qr.length);
-            console.log('📱 QR Code preview:', qr.substring(0, 50) + '...');
-            
-            // Emit QR code to frontend
-            this.emit('qr', qr);
-            
-            // Also emit status update
-            this.emit('status', 'QR Code generated. Please scan with WhatsApp.');
-        }
-        
-        if (connection === 'close') {
-            const error = lastDisconnect?.error;
-            let shouldReconnect = false;
-            
-            if (error) {
-                const statusCode = error.output?.statusCode;
-                shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                
-                console.log('❌ Connection closed:', {
-                    error: error.message,
-                    statusCode,
-                    shouldReconnect
-                });
-            }
-
-            this.emit('status', 'Connection Closed. Reconnecting...');
-            
-            if (shouldReconnect) {
-                setTimeout(() => {
-                    console.log('🔄 Attempting to reconnect...');
-                    this.initWhatsApp();
-                }, 5000);
-            } else {
-                this.emit('status', 'Logged Out. Please scan QR again.');
-            }
-        } else if (connection === 'connecting') {
-            console.log('🔄 Connecting to WhatsApp...');
-            this.emit('status', 'Connecting to WhatsApp...');
-        } else if (connection === 'open') {
-            console.log('✅ WhatsApp connection opened successfully!');
-            this.emit('status', 'Connected!');
-            this.emit('connected');
-        }
+        // Also emit status update
+        this.emit('status', 'QR Code generated. Please scan with WhatsApp.');
     }
+    
+    if (connection === 'close') {
+        const error = lastDisconnect?.error;
+        let shouldReconnect = false;
+        
+        if (error) {
+            const statusCode = error.output?.statusCode;
+            shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            
+            console.log('❌ Connection closed:', {
+                error: error.message,
+                statusCode,
+                shouldReconnect
+            });
+        }
+
+        this.emit('status', 'Connection Closed. Reconnecting...');
+        
+        if (shouldReconnect) {
+            setTimeout(() => {
+                console.log('🔄 Attempting to reconnect...');
+                this.initWhatsApp();
+            }, 5000);
+        } else {
+            this.emit('status', 'Logged Out. Please scan QR again.');
+        }
+    } else if (connection === 'connecting') {
+        console.log('🔄 Connecting to WhatsApp...');
+        this.emit('status', 'Connecting to WhatsApp...');
+    } else if (connection === 'open') {
+        console.log('✅ WhatsApp connection opened successfully!');
+        this.emit('status', 'Connected!');
+        this.emit('connected');
+    }
+}
     
     async handleIncomingWhatsAppMessage(message) {
         try {
