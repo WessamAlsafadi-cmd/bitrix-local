@@ -704,74 +704,83 @@ try {
     });
 
     app.get('/oauth/callback', async function(req, res) {
-        console.log('🔐 OAuth callback received');
-        console.log('📋 Query params: ' + JSON.stringify(req.query));
+    console.log('🔐 OAuth callback received at: ' + new Date().toISOString());
+    console.log('📋 Query params: ' + JSON.stringify(req.query));
+    console.log('📋 Headers: ' + JSON.stringify(req.headers));
+    
+    try {
+        const { code, domain, state } = req.query;
+        if (!code) throw new Error('Missing authorization code');
+        if (!domain) throw new Error('Missing domain parameter');
         
-        try {
-            const { code, domain, state } = req.query;
-            if (!code) throw new Error('Missing authorization code');
-            if (!domain) throw new Error('Missing domain parameter');
-            
-            console.log('🔄 Exchanging code for token...');
-            console.log('🌐 Domain: ' + domain);
-            console.log('🔑 Code: ' + code.substring(0, 20) + '...');
+        console.log('🔄 Exchanging code for token...');
+        console.log('🌐 Domain: ' + domain);
+        console.log('🔑 Code: ' + code.substring(0, 20) + '...');
 
-            const tokenData = {
-                grant_type: 'authorization_code',
-                client_id: process.env.APP_ID,
-                client_secret: process.env.APP_SECRET,
-                code: code,
-                scope: APP_SCOPE
-            };
+        const tokenData = {
+            grant_type: 'authorization_code',
+            client_id: process.env.APP_ID,
+            client_secret: process.env.APP_SECRET,
+            code: code,
+            scope: APP_SCOPE,
+            redirect_uri: `${process.env.BASE_URL}/oauth/callback`
+        };
 
-            const tokenResponse = await axios.post(
-                `https://${domain}/oauth/token/`, 
-                querystring.stringify(tokenData),
-                {
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    },
-                    timeout: 15000
-                }
-            );
-            
-            console.log('📊 Token response status: ' + tokenResponse.status);
-            const { access_token, refresh_token } = tokenResponse.data;
+        console.log('📤 Token request data: ' + JSON.stringify(tokenData));
+        
+        const tokenResponse = await axios.post(
+            `https://${domain}/oauth/token/`, 
+            querystring.stringify(tokenData),
+            {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                timeout: 15000
+            }
+        );
+        
+        console.log('📊 Token response status: ' + tokenResponse.status);
+        console.log('📊 Token response data: ' + JSON.stringify(tokenResponse.data));
+        
+        const { access_token, refresh_token } = tokenResponse.data;
 
-            if (!access_token) throw new Error('Failed to obtain access token from Bitrix24');
+        if (!access_token) throw new Error('Failed to obtain access token from Bitrix24');
 
-            console.log('✅ Access token received');
-            console.log('🚀 Running installation logic...');
+        console.log('✅ Access token received');
+        console.log('🚀 Running installation logic...');
 
-            const customApp = new CustomChannelApp(domain, access_token);
-            const installResult = await customApp.install();
+        const customApp = new CustomChannelApp(domain, access_token);
+        const installResult = await customApp.install();
 
-            console.log('📋 Installation result: ' + (installResult.success ? '✅ Success' : '❌ Failed'));
+        console.log('📋 Installation result: ' + (installResult.success ? '✅ Success' : '❌ Failed'));
 
-            const redirectUrl = `/app?domain=${encodeURIComponent(domain)}&access_token=${encodeURIComponent(access_token)}&installation=${installResult.success ? 'success' : 'partial'}`;
-            console.log('🔄 Redirecting to: ' + redirectUrl);
-            res.redirect(redirectUrl);
-        } catch (error) {
-            console.error('❌ OAuth callback error: ' + error.message);
-            console.error('❌ Stack trace: ' + error.stack);
-            let errorHtml = `
-                <!DOCTYPE html>
-                <html>
-                <head><title>Installation Error</title></head>
-                <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px;">
-                    <div style="background: #f8d7da; color: #721c24; padding: 20px; border-radius: 10px;">
-                        <h2>❌ Installation Failed</h2>
-                        <p><strong>Error:</strong> ${error.message}</p>
-                        <p><strong>Details:</strong> ${error.stack || 'No additional details'}</p>
-                        <p><a href="/">← Try Again</a></p>
-                    </div>
-                </body>
-                </html>
-            `;
-            res.status(500).send(errorHtml);
+        const redirectUrl = `/app?domain=${encodeURIComponent(domain)}&access_token=${encodeURIComponent(access_token)}&installation=${installResult.success ? 'success' : 'partial'}`;
+        console.log('🔄 Redirecting to: ' + redirectUrl);
+        res.redirect(redirectUrl);
+    } catch (error) {
+        console.error('❌ OAuth callback error: ' + error.message);
+        console.error('❌ Stack trace: ' + error.stack);
+        if (error.response) {
+            console.error('❌ Response data: ' + JSON.stringify(error.response.data));
+            console.error('❌ Response status: ' + error.response.status);
         }
-    });
-
+        let errorHtml = `
+            <!DOCTYPE html>
+            <html>
+            <head><title>Installation Error</title></head>
+            <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px;">
+                <div style="background: #f8d7da; color: #721c24; padding: 20px; border-radius: 10px;">
+                    <h2>❌ Installation Failed</h2>
+                    <p><strong>Error:</strong> ${error.message}</p>
+                    <p><strong>Details:</strong> ${error.stack || 'No additional details'}</p>
+                    <p><a href="/">← Try Again</a></p>
+                </div>
+            </body>
+            </html>
+        `;
+        res.status(500).send(errorHtml);
+    }
+});
     function getAppWidgetHTML() {
         return (
             '<!DOCTYPE html>' +
