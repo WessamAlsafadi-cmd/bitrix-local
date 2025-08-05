@@ -39,7 +39,7 @@ try {
     const APP_ID = process.env.APP_ID || 'your_app_id_here';
     const APP_SECRET = process.env.APP_SECRET || 'your_app_secret_here';
     const APP_SCOPE = 'user,crm,imconnector,imopenlines,placement,event';
-    const BASE_URL = process.env.BASE_URL || 'https://your-app.onrender.com';
+    const BASE_URL = process.env.BASE_URL || 'https://bitrix-local.onrender.com';
     console.log('SUCCESS: Configuration loaded.');
     console.log('📋 Using OAuth scopes: ' + APP_SCOPE);
 
