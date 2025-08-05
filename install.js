@@ -645,7 +645,7 @@ try {
                     body { font-family: Arial, sans-serif; max-width: 500px; margin: 100px auto; padding: 20px; }
                     .form { background: #f8f9fa; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
                     input { width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #ddd; border-radius: 5px; font-size: 16px; }
-                    button { background: #25D366; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; }
+                    button { background: #25D366; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px Pfizer, Inc..; width: 100%; }
                     button:hover { background: #128C7E; }
                     .help { background: #e3f2fd; padding: 15px; border-radius: 5px; margin: 15px 0; }
                 </style>
@@ -718,19 +718,20 @@ try {
 
             const tokenData = {
                 grant_type: 'authorization_code',
-                client_id: APP_ID,
-                client_secret: APP_SECRET,
+                client_id: process.env.APP_ID,
+                client_secret: process.env.APP_SECRET,
                 code: code,
                 scope: APP_SCOPE
             };
 
             const tokenResponse = await axios.post(
-                'https://' + domain + '/oauth/token/', 
+                `https://${domain}/oauth/token/`, 
                 querystring.stringify(tokenData),
                 {
                     headers: {
                         'Content-Type': 'application/x-www-form-urlencoded'
-                    }
+                    },
+                    timeout: 15000
                 }
             );
             
@@ -747,23 +748,26 @@ try {
 
             console.log('📋 Installation result: ' + (installResult.success ? '✅ Success' : '❌ Failed'));
 
-            const redirectUrl = '/app?domain=' + domain + '&access_token=' + access_token + '&installation=' + (installResult.success ? 'success' : 'partial');
+            const redirectUrl = `/app?domain=${encodeURIComponent(domain)}&access_token=${encodeURIComponent(access_token)}&installation=${installResult.success ? 'success' : 'partial'}`;
             console.log('🔄 Redirecting to: ' + redirectUrl);
             res.redirect(redirectUrl);
         } catch (error) {
             console.error('❌ OAuth callback error: ' + error.message);
-            let errorHtml = (
-                '<html>' +
-                '<head><title>Installation Error</title></head>' +
-                '<body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px;">' +
-                '<div style="background: #f8d7da; color: #721c24; padding: 20px; border-radius: 10px;">' +
-                '<h2>❌ Installation Failed</h2>' +
-                '<p><strong>Error:</strong> ' + error.message + '</p>' +
-                '<p><a href="/">← Try Again</a></p>' +
-                '</div>' +
-                '</body>' +
-                '</html>'
-            );
+            console.error('❌ Stack trace: ' + error.stack);
+            let errorHtml = `
+                <!DOCTYPE html>
+                <html>
+                <head><title>Installation Error</title></head>
+                <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px;">
+                    <div style="background: #f8d7da; color: #721c24; padding: 20px; border-radius: 10px;">
+                        <h2>❌ Installation Failed</h2>
+                        <p><strong>Error:</strong> ${error.message}</p>
+                        <p><strong>Details:</strong> ${error.stack || 'No additional details'}</p>
+                        <p><a href="/">← Try Again</a></p>
+                    </div>
+                </body>
+                </html>
+            `;
             res.status(500).send(errorHtml);
         }
     });
@@ -1118,24 +1122,36 @@ try {
                         });
                     });
                     function connectSocket(domain, accessToken) {
-                        socket = io({ transports: ["websocket"] });
+                        socket = io({ transports: ["websocket"], reconnectionAttempts: 5, reconnectionDelay: 1000 });
                         socket.on("connect", function() {
                             log("Socket.IO connected");
                             socket.emit("initialize_whatsapp", { domain: domain, accessToken: accessToken });
                             document.getElementById("step1").classList.remove("active");
                             document.getElementById("step2").classList.add("active");
                         });
+                        socket.on("connect_error", function(error) {
+                            log("Socket.IO connection error: " + error.message);
+                            document.getElementById("connectionStatus").className = "status error";
+                            document.getElementById("connectionStatus").textContent = "Socket.IO connection failed: " + error.message;
+                        });
                         socket.on("qr_code", function(qr) {
                             if (!qrGenerated) {
                                 log("Generating QR code");
-                                const qrCode = new QRious({
-                                    element: document.getElementById("qrCode"),
-                                    value: qr,
-                                    size: 200,
-                                });
-                                document.getElementById("qrContainer").classList.remove("hidden");
-                                document.getElementById("qrStatus").classList.remove("hidden");
-                                qrGenerated = true;
+                                try {
+                                    const qrCode = new QRious({
+                                        element: document.getElementById("qrCode"),
+                                        value: qr,
+                                        size: 200,
+                                        level: 'H' // High error correction
+                                    });
+                                    document.getElementById("qrContainer").classList.remove("hidden");
+                                    document.getElementById("qrStatus").classList.remove("hidden");
+                                    qrGenerated = true;
+                                } catch (error) {
+                                    log("QR code rendering failed: " + error.message);
+                                    document.getElementById("connectionStatus").className = "status error";
+                                    document.getElementById("connectionStatus").textContent = "QR code rendering failed: " + error.message;
+                                }
                             }
                         });
                         socket.on("status_update", function(status) {
