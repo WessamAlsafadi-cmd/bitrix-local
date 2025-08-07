@@ -344,13 +344,112 @@ try {
     });
 
     app.get('/install.js', function(req, res) {
-        console.log('📦 Install.js route accessed');
-        console.log('📋 Query params: ' + JSON.stringify(req.query));
-        console.log('📋 Headers: ' + JSON.stringify(req.headers));
-        console.log('📋 Referer: ' + req.headers.referer);
+    console.log('📦 Install.js route accessed');
+    console.log('📋 Query params: ' + JSON.stringify(req.query));
+    console.log('📋 Headers: ' + JSON.stringify(req.headers));
+    console.log('📋 Referer: ' + req.headers.referer);
+    
+    let domain = req.query.DOMAIN || req.query.domain;
+    if (!domain && req.headers.referer) {
+        try {
+            const refererUrl = new URL(req.headers.referer);
+            domain = refererUrl.hostname;
+            console.log('🔍 Extracted domain from referer: ' + domain);
+        } catch (e) {
+            console.log('❌ Could not parse referer URL');
+        }
+    }
+    
+    if (!domain) {
+        return res.send(getBitrix24DomainFormHTML());
+    }
+    
+    console.log('🔐 Creating OAuth URL for domain: ' + domain);
+    console.log('🔐 Using APP_ID: ' + process.env.APP_ID);
+    console.log('🔐 Using BASE_URL: ' + process.env.BASE_URL);
+    console.log('🔐 Using scopes: ' + APP_SCOPE);
+    
+    const authUrl = `https://${domain}/oauth/authorize/?${querystring.stringify({
+        client_id: process.env.APP_ID,
+        response_type: 'code',
+        scope: APP_SCOPE,
+        redirect_uri: `${process.env.BASE_URL}/oauth/callback`,
+        state: encodeURIComponent(JSON.stringify({ domain: domain }))
+    })}`;
+    
+    console.log('🌐 OAuth URL: ' + authUrl);
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Installing WhatsApp Connector</title>
+            <style>
+                body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+                .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #25D366; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 20px auto; }
+                @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                .debug { background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px; text-align: left; }
+                pre { background: #e9ecef; padding: 10px; border-radius: 4px; }
+            </style>
+        </head>
+        <body>
+            <h2>📱 Installing WhatsApp Connector</h2>
+            <div class="spinner"></div>
+            <p>Domain: <strong>${domain}</strong></p>
+            <p>Redirecting to Bitrix24 authorization...</p>
+            <div class="debug">
+                <h4>Debug Information:</h4>
+                <pre>Domain: ${domain}
+APP_ID: ${process.env.APP_ID}
+BASE_URL: ${process.env.BASE_URL}
+OAuth URL: ${authUrl}</pre>
+            </div>
+            <script>
+                console.log("Redirecting to: ${authUrl}");
+                setTimeout(function() {
+                    window.location.href = "${authUrl}";
+                }, 2000);
+            </script>
+        </body>
+        </html>
+    `);
+});
+    app.get('/test-oauth/:domain', function(req, res) {
+    const domain = req.params.domain;
+    const authUrl = `https://${domain}/oauth/authorize/?${querystring.stringify({
+        client_id: process.env.APP_ID,
+        response_type: 'code',
+        scope: APP_SCOPE,
+        redirect_uri: `${process.env.BASE_URL}/oauth/callback`,
+        state: encodeURIComponent(JSON.stringify({ domain: domain }))
+    })}`;
+    
+    res.json({
+        domain: domain,
+        authUrl: authUrl,
+        config: {
+            APP_ID: process.env.APP_ID,
+            BASE_URL: process.env.BASE_URL,
+            REDIRECT_URI: `${process.env.BASE_URL}/oauth/callback`
+        }
+    });
+});
+// #1: Fix the POST /install.js route
+app.post('/install.js', async function(req, res) {
+    console.log('📦 POST Install.js route accessed');
+    console.log('📋 Body: ' + JSON.stringify(req.body));
+    console.log('📋 Headers: ' + JSON.stringify(req.headers));
+    
+    const authId = req.body.AUTH_ID;
+    const memberId = req.body.member_id;
+    const placement = req.body.PLACEMENT;
+    
+    if (authId && memberId) {
+        console.log('✅ Bitrix24 installation request detected');
+        console.log('🔑 AUTH_ID: ' + authId);
+        console.log('👤 Member ID: ' + memberId);
         
-        let domain = req.query.DOMAIN || req.query.domain;
-        if (!domain && req.headers.referer) {
+        let domain = null;
+        if (req.headers.referer) {
             try {
                 const refererUrl = new URL(req.headers.referer);
                 domain = refererUrl.hostname;
@@ -360,110 +459,42 @@ try {
             }
         }
         
-        if (!domain) {
-            return res.send(getBitrix24DomainFormHTML());
-        }
-        
-        console.log('🔐 Creating OAuth URL for domain: ' + domain);
-        console.log('🔐 Using APP_ID: ' + process.env.APP_ID);
-        console.log('🔐 Using scopes: ' + APP_SCOPE);
-        
-        const authUrl = `https://${domain}/oauth/authorize/?${querystring.stringify({
-            client_id: process.env.APP_ID,
-            response_type: 'code',
-            scope: APP_SCOPE,
-            redirect_uri: `${process.env.BASE_URL}/oauth/callback`
-        })}`;
-        
-        console.log('🌐 OAuth URL: ' + authUrl);
-        res.send(`
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Installing WhatsApp Connector</title>
-                <style>
-                    body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-                    .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #25D366; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 20px auto; }
-                    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-                </style>
-            </head>
-            <body>
-                <h2>📱 Installing WhatsApp Connector</h2>
-                <div class="spinner"></div>
-                <p>Domain: <strong>${domain}</strong></p>
-                <p>Redirecting to Bitrix24 authorization...</p>
-                <script>
-                    console.log("Redirecting to: ${authUrl}");
-                    window.location.href = "${authUrl}";
-                </script>
-            </body>
-            </html>
-        `);
-    });
-
-    app.post('/install.js', async function(req, res) {
-        console.log('📦 POST Install.js route accessed');
-        console.log('📋 Body: ' + JSON.stringify(req.body));
-        console.log('📋 Headers: ' + JSON.stringify(req.headers));
-        
-        const authId = req.body.AUTH_ID;
-        const memberId = req.body.member_id;
-        const placement = req.body.PLACEMENT;
-        
-        if (authId && memberId) {
-            console.log('✅ Bitrix24 installation request detected');
-            console.log('🔑 AUTH_ID: ' + authId);
-            console.log('👤 Member ID: ' + memberId);
+        if (domain && domain.includes('bitrix24')) {
+            console.log('🚀 Redirecting to OAuth for domain: ' + domain);
             
-            let domain = null;
-            if (req.headers.referer) {
-                try {
-                    const refererUrl = new URL(req.headers.referer);
-                    domain = refererUrl.hostname;
-                    console.log('🔍 Extracted domain from referer: ' + domain);
-                } catch (e) {
-                    console.log('❌ Could not parse referer URL');
-                }
-            }
-            
-            if (!domain && req.headers.host) {
-                console.log('🔍 Checking host header: ' + req.headers.host);
-            }
-            
-            if (!domain && memberId) {
-                console.log('🔍 Trying to use member_id for domain detection');
-            }
-            
-            if (domain && domain.includes('bitrix24')) {
-                console.log('🚀 Redirecting to OAuth for domain: ' + domain);
-                const authUrl = 'https://' + domain + '/oauth/authorize/?' + querystring.stringify({
-                    client_id: APP_ID,
-                    response_type: 'code',
-                    scope: APP_SCOPE,
-                    redirect_uri: BASE_URL + '/oauth/callback'
-                });
-                return res.redirect(authUrl);
-            } else {
-                console.log('⚠️ Bitrix24 installation detected but no domain found');
-                return res.send(getBitrix24InstallationFormHTML(authId, memberId));
-            }
-        }
-        
-        const domain = req.body.domain || req.body.DOMAIN;
-        if (domain) {
-            const authUrl = 'https://' + domain + '/oauth/authorize/?' + querystring.stringify({
+            // FIXED: Add domain as state parameter
+            const authUrl = `https://${domain}/oauth/authorize/?${querystring.stringify({
                 client_id: APP_ID,
                 response_type: 'code',
                 scope: APP_SCOPE,
-                redirect_uri: BASE_URL + '/oauth/callback'
-            });
+                redirect_uri: `${BASE_URL}/oauth/callback`,
+                state: encodeURIComponent(JSON.stringify({ domain: domain })) // Pass domain in state
+            })}`;
+            
+            console.log('🌐 OAuth URL: ' + authUrl);
             return res.redirect(authUrl);
+        } else {
+            console.log('⚠️ Bitrix24 installation detected but no domain found');
+            return res.send(getBitrix24InstallationFormHTML(authId, memberId));
         }
-        
-        console.log('❌ Insufficient data for installation');
-        return res.status(400).send(getInstallationErrorHTML());
-    });
-
+    }
+    
+    const domain = req.body.domain || req.body.DOMAIN;
+    if (domain) {
+        const authUrl = `https://${domain}/oauth/authorize/?${querystring.stringify({
+            client_id: APP_ID,
+            response_type: 'code',
+            scope: APP_SCOPE,
+            redirect_uri: `${BASE_URL}/oauth/callback`,
+            state: encodeURIComponent(JSON.stringify({ domain: domain }))
+        })}`;
+        return res.redirect(authUrl);
+    }
+    
+    console.log('❌ Insufficient data for installation');
+    return res.status(400).send(getInstallationErrorHTML());
+});
+    
     function getBitrix24InstallationFormHTML(authId, memberId) {
         return `
             <!DOCTYPE html>
@@ -709,8 +740,31 @@ try {
     console.log('📋 Headers: ' + JSON.stringify(req.headers));
     
     try {
-        const { code, domain, state } = req.query;
+        const { code, state, domain: queryDomain } = req.query;
         if (!code) throw new Error('Missing authorization code');
+        
+        // Extract domain from state or query parameter
+        let domain = queryDomain;
+        if (state) {
+            try {
+                const stateData = JSON.parse(decodeURIComponent(state));
+                domain = stateData.domain || domain;
+            } catch (e) {
+                console.log('⚠️ Could not parse state parameter');
+            }
+        }
+        
+        // Fallback: try to extract domain from referrer
+        if (!domain && req.headers.referer) {
+            try {
+                const refererUrl = new URL(req.headers.referer);
+                domain = refererUrl.hostname;
+                console.log('🔍 Fallback: Extracted domain from referer: ' + domain);
+            } catch (e) {
+                console.log('❌ Could not parse referer URL');
+            }
+        }
+        
         if (!domain) throw new Error('Missing domain parameter');
         
         console.log('🔄 Exchanging code for token...');
@@ -726,7 +780,11 @@ try {
             redirect_uri: `${process.env.BASE_URL}/oauth/callback`
         };
 
-        console.log('📤 Token request data: ' + JSON.stringify(tokenData));
+        console.log('📤 Token request to: https://' + domain + '/oauth/token/');
+        console.log('📤 Token request data: ' + JSON.stringify({
+            ...tokenData,
+            client_secret: '[HIDDEN]'
+        }));
         
         const tokenResponse = await axios.post(
             `https://${domain}/oauth/token/`, 
@@ -763,16 +821,36 @@ try {
         if (error.response) {
             console.error('❌ Response data: ' + JSON.stringify(error.response.data));
             console.error('❌ Response status: ' + error.response.status);
+            console.error('❌ Response headers: ' + JSON.stringify(error.response.headers));
         }
+        
         let errorHtml = `
             <!DOCTYPE html>
             <html>
             <head><title>Installation Error</title></head>
             <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px;">
                 <div style="background: #f8d7da; color: #721c24; padding: 20px; border-radius: 10px;">
-                    <h2>❌ Installation Failed</h2>
+                    <h2>❌ OAuth Callback Failed</h2>
                     <p><strong>Error:</strong> ${error.message}</p>
-                    <p><strong>Details:</strong> ${error.stack || 'No additional details'}</p>
+                    <p><strong>Domain:</strong> ${req.query.domain || 'Not provided'}</p>
+                    <p><strong>Code present:</strong> ${!!req.query.code}</p>
+                    <p><strong>State present:</strong> ${!!req.query.state}</p>
+                    <p><strong>Time:</strong> ${new Date().toISOString()}</p>
+                    <details>
+                        <summary>Debug Information</summary>
+                        <pre>${JSON.stringify({
+                            query: req.query,
+                            headers: {
+                                referer: req.headers.referer,
+                                'user-agent': req.headers['user-agent']
+                            },
+                            env: {
+                                APP_ID: process.env.APP_ID ? 'Set' : 'Missing',
+                                APP_SECRET: process.env.APP_SECRET ? 'Set' : 'Missing',
+                                BASE_URL: process.env.BASE_URL
+                            }
+                        }, null, 2)}</pre>
+                    </details>
                     <p><a href="/">← Try Again</a></p>
                 </div>
             </body>
@@ -780,6 +858,23 @@ try {
         `;
         res.status(500).send(errorHtml);
     }
+});
+app.get('/debug/config', function(req, res) {
+    res.json({
+        timestamp: new Date().toISOString(),
+        config: {
+            APP_ID: process.env.APP_ID || 'NOT_SET',
+            APP_SECRET: process.env.APP_SECRET ? 'SET' : 'NOT_SET',
+            BASE_URL: process.env.BASE_URL || 'NOT_SET',
+            PORT: process.env.PORT || '3000',
+            NODE_ENV: process.env.NODE_ENV || 'NOT_SET'
+        },
+        urls: {
+            oauth_callback: `${process.env.BASE_URL}/oauth/callback`,
+            app_url: `${process.env.BASE_URL}/app`,
+            health_check: `${process.env.BASE_URL}/health`
+        }
+    });
 });
     function getAppWidgetHTML() {
         return (
