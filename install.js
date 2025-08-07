@@ -1507,615 +1507,736 @@ try {
     }
 
     // FIXED: Enhanced embedded HTML for direct Bitrix24 integration
-    function getBitrix24EmbeddedHTML(domain, accessToken) {
-        return `
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>WhatsApp Connector - Bitrix24</title>
-                <script src="//api.bitrix24.com/api/v1/"></script>
-                <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
-                <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
-                <style>
-                    * {
-                        margin: 0;
-                        padding: 0;
-                        box-sizing: border-box;
-                    }
-                    body {
-                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                        background: #f5f5f5;
-                        min-height: 100vh;
-                        padding: 10px;
-                    }
-                    .container {
-                        max-width: 100%;
-                        margin: 0 auto;
-                        background: white;
-                        border-radius: 12px;
-                        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                        overflow: hidden;
-                    }
-                    .header {
-                        background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
-                        color: white;
-                        padding: 20px;
-                        text-align: center;
-                    }
-                    .header h1 {
-                        font-size: 1.8rem;
-                        margin-bottom: 5px;
-                    }
-                    .content {
-                        padding: 20px;
-                    }
-                    .step {
-                        margin-bottom: 20px;
-                        padding: 15px;
-                        border-radius: 8px;
-                        border: 2px solid #f0f0f0;
-                        transition: all 0.3s ease;
-                    }
-                    .step.active {
-                        border-color: #25D366;
-                        background: #f8fff8;
-                    }
-                    .step-header {
-                        display: flex;
-                        align-items: center;
-                        margin-bottom: 10px;
-                    }
-                    .step-number {
-                        width: 30px;
-                        height: 30px;
-                        border-radius: 50%;
-                        background: #25D366;
-                        color: white;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        font-weight: bold;
-                        margin-right: 10px;
-                        font-size: 0.9rem;
-                    }
-                    .step-title {
-                        font-size: 1.1rem;
-                        font-weight: 600;
-                        color: #333;
-                    }
-                    .btn {
-                        padding: 10px 20px;
-                        border: none;
-                        border-radius: 6px;
-                        font-size: 0.9rem;
-                        font-weight: 600;
-                        cursor: pointer;
-                        transition: all 0.3s ease;
-                    }
-                    .btn-primary {
-                        background: #25D366;
-                        color: white;
-                    }
-                    .btn-primary:hover {
-                        background: #128C7E;
-                    }
-                    .btn-danger {
-                        background: #dc3545;
-                        color: white;
-                    }
-                    .status {
-                        padding: 10px;
-                        border-radius: 6px;
-                        margin: 10px 0;
-                        font-size: 0.9rem;
-                    }
-                    .status.success {
-                        background: #d4edda;
-                        border: 1px solid #c3e6cb;
-                        color: #155724;
-                    }
-                    .status.error {
-                        background: #f8d7da;
-                        border: 1px solid #f5c6cb;
-                        color: #721c24;
-                    }
-                    .status.info {
-                        background: #d1ecf1;
-                        border: 1px solid #bee5eb;
-                        color: #0c5460;
-                    }
-                    .qr-container {
-                        text-align: center;
-                        padding: 20px;
-                        background: #f8f9fa;
-                        border-radius: 8px;
-                        margin: 15px 0;
-                    }
-                    .qr-code {
-                        display: inline-block;
-                        padding: 15px;
-                        background: white;
-                        border-radius: 8px;
-                        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-                        margin-bottom: 15px;
-                    }
-                    .connection-info {
-                        display: grid;
-                        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-                        gap: 15px;
-                        margin-top: 15px;
-                    }
-                    .info-card {
-                        background: #f8f9fa;
-                        padding: 15px;
-                        border-radius: 8px;
-                        text-align: center;
-                    }
-                    .info-card h4 {
-                        color: #25D366;
-                        margin-bottom: 8px;
-                        font-size: 0.9rem;
-                    }
-                    .info-card p {
-                        color: #666;
-                        font-size: 1rem;
-                        font-weight: 600;
-                    }
-                    .hidden {
-                        display: none;
-                    }
-                    .debug-log {
-                        background: #1e1e1e;
-                        color: #00ff00;
-                        padding: 10px;
-                        border-radius: 6px;
-                        font-family: monospace;
-                        font-size: 11px;
-                        max-height: 150px;
-                        overflow-y: auto;
-                        margin: 10px 0;
-                    }
-                    .auto-connect-info {
-                        background: #e3f2fd;
-                        border: 1px solid #2196F3;
-                        border-radius: 6px;
-                        padding: 15px;
-                        margin: 15px 0;
-                    }
-                    .auto-connect-info h4 {
-                        color: #1976D2;
-                        margin-bottom: 8px;
-                    }
-                    .chat-interface {
-                        border-top: 1px solid #eee;
-                        padding: 20px;
-                        margin-top: 20px;
-                        display: none;
-                    }
-                    .chat-interface.active {
-                        display: block;
-                    }
-                    .messages-container {
-                        height: 300px;
-                        border: 1px solid #ddd;
-                        border-radius: 8px;
-                        padding: 10px;
-                        overflow-y: auto;
-                        background: #f9f9f9;
-                        margin-bottom: 15px;
-                    }
-                    .message {
-                        margin: 8px 0;
-                        padding: 8px 12px;
-                        border-radius: 12px;
-                        max-width: 70%;
-                        word-wrap: break-word;
-                    }
-                    .message.received {
-                        background: white;
-                        border: 1px solid #ddd;
-                        margin-right: auto;
-                    }
-                    .message.sent {
-                        background: #25D366;
-                        color: white;
-                        margin-left: auto;
-                    }
-                    .message-input {
-                        display: flex;
-                        gap: 10px;
-                    }
-                    .message-input input {
-                        flex: 1;
-                        padding: 10px;
-                        border: 1px solid #ddd;
-                        border-radius: 20px;
-                        font-size: 14px;
-                    }
-                    .message-input button {
-                        padding: 10px 20px;
-                        background: #25D366;
-                        color: white;
-                        border: none;
-                        border-radius: 20px;
-                        cursor: pointer;
-                        font-weight: 600;
-                    }
-                    .message-input button:hover {
-                        background: #128C7E;
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <h1>📱 WhatsApp Connector</h1>
-                        <p>Connect your WhatsApp to Bitrix24 CRM</p>
+    // Fixed getBitrix24EmbeddedHTML function with proper chat interface activation
+function getBitrix24EmbeddedHTML(domain, accessToken) {
+    return `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>WhatsApp Connector - Bitrix24</title>
+            <script src="//api.bitrix24.com/api/v1/"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
+            <style>
+                * {
+                    margin: 0;
+                    padding: 0;
+                    box-sizing: border-box;
+                }
+                body {
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    background: #f5f5f5;
+                    min-height: 100vh;
+                }
+                .container {
+                    max-width: 100%;
+                    margin: 0 auto;
+                    background: white;
+                    min-height: 100vh;
+                    display: flex;
+                    flex-direction: column;
+                }
+                .header {
+                    background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+                    color: white;
+                    padding: 15px 20px;
+                    text-align: center;
+                    flex-shrink: 0;
+                }
+                .header h1 {
+                    font-size: 1.5rem;
+                    margin-bottom: 5px;
+                }
+                .setup-container {
+                    padding: 20px;
+                    flex: 1;
+                    display: flex;
+                    flex-direction: column;
+                }
+                .chat-container {
+                    padding: 0;
+                    flex: 1;
+                    display: none;
+                    flex-direction: column;
+                }
+                .chat-container.active {
+                    display: flex;
+                }
+                .step {
+                    margin-bottom: 20px;
+                    padding: 15px;
+                    border-radius: 8px;
+                    border: 2px solid #f0f0f0;
+                    transition: all 0.3s ease;
+                }
+                .step.active {
+                    border-color: #25D366;
+                    background: #f8fff8;
+                }
+                .step.completed {
+                    border-color: #28a745;
+                    background: #d4edda;
+                }
+                .step-header {
+                    display: flex;
+                    align-items: center;
+                    margin-bottom: 10px;
+                }
+                .step-number {
+                    width: 30px;
+                    height: 30px;
+                    border-radius: 50%;
+                    background: #25D366;
+                    color: white;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-weight: bold;
+                    margin-right: 10px;
+                    font-size: 0.9rem;
+                }
+                .step.completed .step-number {
+                    background: #28a745;
+                }
+                .step-title {
+                    font-size: 1.1rem;
+                    font-weight: 600;
+                    color: #333;
+                }
+                .status {
+                    padding: 10px;
+                    border-radius: 6px;
+                    margin: 10px 0;
+                    font-size: 0.9rem;
+                }
+                .status.success {
+                    background: #d4edda;
+                    border: 1px solid #c3e6cb;
+                    color: #155724;
+                }
+                .status.error {
+                    background: #f8d7da;
+                    border: 1px solid #f5c6cb;
+                    color: #721c24;
+                }
+                .status.info {
+                    background: #d1ecf1;
+                    border: 1px solid #bee5eb;
+                    color: #0c5460;
+                }
+                .qr-container {
+                    text-align: center;
+                    padding: 20px;
+                    background: #f8f9fa;
+                    border-radius: 8px;
+                    margin: 15px 0;
+                }
+                .qr-code {
+                    display: inline-block;
+                    padding: 15px;
+                    background: white;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                    margin-bottom: 15px;
+                }
+                .hidden {
+                    display: none;
+                }
+                .debug-log {
+                    background: #1e1e1e;
+                    color: #00ff00;
+                    padding: 10px;
+                    border-radius: 6px;
+                    font-family: monospace;
+                    font-size: 11px;
+                    max-height: 120px;
+                    overflow-y: auto;
+                    margin: 10px 0;
+                }
+                
+                /* Chat Interface Styles */
+                .chat-header {
+                    background: #075e54;
+                    color: white;
+                    padding: 15px 20px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                }
+                .chat-header h3 {
+                    margin: 0;
+                    font-size: 1.2rem;
+                }
+                .connection-status {
+                    background: rgba(255,255,255,0.2);
+                    padding: 5px 10px;
+                    border-radius: 15px;
+                    font-size: 0.8rem;
+                }
+                .messages-area {
+                    flex: 1;
+                    background: #e5ddd5;
+                    background-image: 
+                        radial-gradient(circle at 50% 50%, rgba(255,255,255,0.1) 1px, transparent 1px);
+                    background-size: 20px 20px;
+                    padding: 20px;
+                    overflow-y: auto;
+                    min-height: 400px;
+                }
+                .message {
+                    max-width: 70%;
+                    margin: 8px 0;
+                    padding: 10px 15px;
+                    border-radius: 18px;
+                    word-wrap: break-word;
+                    position: relative;
+                }
+                .message.received {
+                    background: white;
+                    margin-right: auto;
+                    border-bottom-left-radius: 5px;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                }
+                .message.sent {
+                    background: #dcf8c6;
+                    margin-left: auto;
+                    border-bottom-right-radius: 5px;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                }
+                .message-time {
+                    font-size: 11px;
+                    color: #666;
+                    margin-top: 5px;
+                    text-align: right;
+                }
+                .message-input-area {
+                    background: #f0f2f5;
+                    padding: 10px 20px;
+                    border-top: 1px solid #ddd;
+                }
+                .message-input-row {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                }
+                .contact-selector {
+                    flex-shrink: 0;
+                    width: 200px;
+                    padding: 10px;
+                    border: 1px solid #ddd;
+                    border-radius: 20px;
+                    font-size: 14px;
+                    background: white;
+                }
+                .message-input {
+                    flex: 1;
+                    padding: 10px 15px;
+                    border: 1px solid #ddd;
+                    border-radius: 20px;
+                    font-size: 14px;
+                    background: white;
+                    resize: none;
+                    min-height: 40px;
+                    max-height: 120px;
+                }
+                .send-btn {
+                    background: #25D366;
+                    color: white;
+                    border: none;
+                    border-radius: 50%;
+                    width: 45px;
+                    height: 45px;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 18px;
+                    flex-shrink: 0;
+                }
+                .send-btn:hover {
+                    background: #128C7E;
+                }
+                .send-btn:disabled {
+                    background: #ccc;
+                    cursor: not-allowed;
+                }
+                .placeholder-message {
+                    text-align: center;
+                    color: #666;
+                    font-style: italic;
+                    padding: 50px 20px;
+                    background: rgba(255,255,255,0.5);
+                    border-radius: 10px;
+                    margin: 20px;
+                }
+                .disconnect-btn {
+                    background: #dc3545;
+                    color: white;
+                    border: none;
+                    padding: 8px 16px;
+                    border-radius: 15px;
+                    cursor: pointer;
+                    font-size: 0.8rem;
+                }
+                .disconnect-btn:hover {
+                    background: #c82333;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>📱 WhatsApp Connector</h1>
+                    <p>Connect your WhatsApp to Bitrix24 CRM</p>
+                </div>
+                
+                <!-- Setup Container (shown during connection) -->
+                <div class="setup-container" id="setupContainer">
+                    <div class="debug-log" id="debugLog">
+                        <div>🔧 Bitrix24 Embedded Mode - Ready</div>
                     </div>
-                    <div class="content">
-                        <div class="debug-log" id="debugLog">
-                            <div>🔧 Bitrix24 Embedded Mode - Ready</div>
+                    
+                    <div class="step active" id="step1">
+                        <div class="step-header">
+                            <div class="step-number">1</div>
+                            <div class="step-title">Connecting to Bitrix24...</div>
                         </div>
-                        <div class="auto-connect-info">
-                            <h4>🎯 Bitrix24 Integration Active</h4>
-                            <p>This WhatsApp connector is running inside your Bitrix24. We'll automatically use your Bitrix24 credentials to connect.</p>
+                        <div id="bitrixStatus">Initializing Bitrix24 connection...</div>
+                    </div>
+                    
+                    <div class="step" id="step2">
+                        <div class="step-header">
+                            <div class="step-number">2</div>
+                            <div class="step-title">Scan QR Code</div>
                         </div>
-                        <div class="step active" id="step1">
-                            <div class="step-header">
-                                <div class="step-number">1</div>
-                                <div class="step-title">Connecting to Bitrix24...</div>
-                            </div>
-                            <div id="bitrixStatus">Initializing Bitrix24 connection...</div>
+                        <div class="qr-container hidden" id="qrContainer">
+                            <canvas id="qrCode" class="qr-code"></canvas>
+                            <p>Scan this QR code with your WhatsApp app to connect.</p>
                         </div>
-                        <div class="step" id="step2">
-                            <div class="step-header">
-                                <div class="step-number">2</div>
-                                <div class="step-title">Scan QR Code</div>
-                            </div>
-                            <div class="qr-container hidden" id="qrContainer">
-                                <canvas id="qrCode" class="qr-code"></canvas>
-                                <p>Scan this QR code with your WhatsApp app to connect.</p>
-                            </div>
-                            <div id="qrStatus" class="status info hidden">Waiting for QR scan...</div>
+                        <div id="qrStatus" class="status info hidden">Waiting for QR scan...</div>
+                    </div>
+                    
+                    <div class="step" id="step3">
+                        <div class="step-header">
+                            <div class="step-number">3</div>
+                            <div class="step-title">Connection Status</div>
                         </div>
-                        <div class="step" id="step3">
-                            <div class="step-header">
-                                <div class="step-number">3</div>
-                                <div class="step-title">Connection Status</div>
-                            </div>
-                            <div id="connectionStatus" class="status info">Not connected</div>
-                            <div class="connection-info hidden" id="connectionInfo">
-                                <div class="info-card">
-                                    <h4>Status</h4>
-                                    <p id="statusText">Disconnected</p>
-                                </div>
-                                <div class="info-card">
-                                    <h4>Connected Since</h4>
-                                    <p id="connectedSince">-</p>
-                                </div>
-                                <div class="info-card">
-                                    <h4>Last Message</h4>
-                                    <p id="lastMessage">-</p>
-                                </div>
-                            </div>
-                            <button class="btn btn-danger hidden" id="disconnectBtn">Disconnect WhatsApp</button>
+                        <div id="connectionStatus" class="status info">Not connected</div>
+                    </div>
+                </div>
+                
+                <!-- Chat Container (shown after successful connection) -->
+                <div class="chat-container" id="chatContainer">
+                    <div class="chat-header">
+                        <h3>💬 WhatsApp Chat</h3>
+                        <div class="connection-status" id="chatConnectionStatus">
+                            Connected
+                        </div>
+                        <button class="disconnect-btn" id="disconnectBtn">Disconnect</button>
+                    </div>
+                    
+                    <div class="messages-area" id="messagesArea">
+                        <div class="placeholder-message" id="placeholderMessage">
+                            🎉 WhatsApp connected successfully!<br>
+                            Select a contact and start messaging.
                         </div>
                     </div>
                     
-                    <!-- Chat Interface -->
-                    <div class="chat-interface" id="chatInterface">
-                        <h3>💬 WhatsApp Messages</h3>
-                        <div class="messages-container" id="messagesContainer">
-                            <div style="text-align: center; color: #666; padding: 20px;">
-                                No messages yet. Start a conversation!
-                            </div>
-                        </div>
-                        <div class="message-input">
-                            <input type="text" id="messageInput" placeholder="Type a message..." disabled>
-                            <button id="sendBtn" disabled>Send</button>
+                    <div class="message-input-area">
+                        <div class="message-input-row">
+                            <input type="text" 
+                                   class="contact-selector" 
+                                   id="contactSelector"
+                                   placeholder="Enter phone number (e.g., 1234567890)"
+                                   disabled>
+                            <textarea class="message-input" 
+                                      id="messageInput"
+                                      placeholder="Type your message..."
+                                      disabled
+                                      rows="1"></textarea>
+                            <button class="send-btn" id="sendBtn" disabled>
+                                ➤
+                            </button>
                         </div>
                     </div>
                 </div>
-                <script>
-                    let socket;
-                    let qrGenerated = false;
-                    let isConnected = false;
-                    let currentDomain = null;
-                    let currentAccessToken = null;
-                    const debugLog = document.getElementById("debugLog");
+            </div>
+            
+            <script>
+                let socket;
+                let qrGenerated = false;
+                let isConnected = false;
+                let currentDomain = null;
+                let currentAccessToken = null;
+                const debugLog = document.getElementById("debugLog");
+                
+                // UI Elements
+                const setupContainer = document.getElementById("setupContainer");
+                const chatContainer = document.getElementById("chatContainer");
+                const messagesArea = document.getElementById("messagesArea");
+                const messageInput = document.getElementById("messageInput");
+                const contactSelector = document.getElementById("contactSelector");
+                const sendBtn = document.getElementById("sendBtn");
+                const disconnectBtn = document.getElementById("disconnectBtn");
+                const placeholderMessage = document.getElementById("placeholderMessage");
+                
+                function log(message) {
+                    const logEntry = document.createElement("div");
+                    logEntry.textContent = \`\${new Date().toLocaleTimeString()} - \${message}\`;
+                    debugLog.appendChild(logEntry);
+                    debugLog.scrollTop = debugLog.scrollHeight;
+                }
+                
+                function showChatInterface() {
+                    log("🎯 Switching to chat interface");
+                    setupContainer.style.display = 'none';
+                    chatContainer.classList.add('active');
                     
-                    function log(message) {
-                        const logEntry = document.createElement("div");
-                        logEntry.textContent = \`\${new Date().toLocaleTimeString()} - \${message}\`;
-                        debugLog.appendChild(logEntry);
-                        debugLog.scrollTop = debugLog.scrollHeight;
+                    // Enable chat controls
+                    contactSelector.disabled = false;
+                    messageInput.disabled = false;
+                    sendBtn.disabled = false;
+                    
+                    // Focus on contact selector for immediate use
+                    setTimeout(() => {
+                        contactSelector.focus();
+                    }, 500);
+                }
+                
+                function addMessage(text, sender, timestamp, phone = '') {
+                    // Remove placeholder if this is the first message
+                    if (placeholderMessage && placeholderMessage.parentNode) {
+                        placeholderMessage.remove();
                     }
                     
-                    function addMessage(text, sender, timestamp) {
-                        const messagesContainer = document.getElementById("messagesContainer");
-                        const messageDiv = document.createElement("div");
-                        messageDiv.className = \`message \${sender === 'user' ? 'sent' : 'received'}\`;
-                        messageDiv.innerHTML = \`
-                            <div>\${text}</div>
-                            <div style="font-size: 11px; opacity: 0.7; margin-top: 4px;">
-                                \${new Date(timestamp).toLocaleTimeString()}
-                            </div>
-                        \`;
-                        messagesContainer.appendChild(messageDiv);
-                        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                        
-                        // Remove "no messages" placeholder
-                        const placeholder = messagesContainer.querySelector('div[style*="text-align: center"]');
-                        if (placeholder && messagesContainer.children.length > 1) {
-                            placeholder.remove();
-                        }
+                    const messageDiv = document.createElement("div");
+                    messageDiv.className = \`message \${sender === 'user' ? 'sent' : 'received'}\`;
+                    
+                    let displayText = text;
+                    if (sender === 'received' && phone) {
+                        displayText = \`\${phone}: \${text}\`;
                     }
                     
-                    // Initialize Bitrix24 connection
-                    BX24.init(function() {
-                        log("Bitrix24 API initialized");
-                        
-                        BX24.callMethod("user.current", {}, function(result) {
-                            if (result.error()) {
-                                document.getElementById("bitrixStatus").className = "status error";
-                                document.getElementById("bitrixStatus").textContent = "Bitrix24 connection failed";
-                                log("Bitrix24 connection failed: " + result.error().getDescription());
-                            } else {
-                                const userData = result.data();
-                                document.getElementById("bitrixStatus").className = "status success";
-                                document.getElementById("bitrixStatus").textContent = "Connected to Bitrix24 as " + userData.NAME;
-                                log("Connected to Bitrix24 as " + userData.NAME);
-                                
-                                // Get domain and access token
-                                currentDomain = "${domain}" || BX24.getDomain();
-                                currentAccessToken = "${accessToken}";
-                                
-                                if (!currentAccessToken) {
-                                    BX24.getAuth(function(auth) {
-                                        if (auth && auth.access_token) {
-                                            currentAccessToken = auth.access_token;
-                                            log("Using OAuth access token");
-                                            connectSocket(currentDomain, currentAccessToken);
-                                        } else {
-                                            log("No access token available");
-                                            document.getElementById("bitrixStatus").className = "status error";
-                                            document.getElementById("bitrixStatus").textContent = "No access token available";
-                                        }
-                                    });
-                                } else {
-                                    connectSocket(currentDomain, currentAccessToken);
-                                }
-                            }
-                        });
+                    messageDiv.innerHTML = \`
+                        <div>\${displayText}</div>
+                        <div class="message-time">
+                            \${new Date(timestamp).toLocaleTimeString()}
+                        </div>
+                    \`;
+                    
+                    messagesArea.appendChild(messageDiv);
+                    messagesArea.scrollTop = messagesArea.scrollHeight;
+                }
+                
+                // Auto-resize textarea
+                messageInput.addEventListener('input', function() {
+                    this.style.height = 'auto';
+                    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+                });
+                
+                // Send message on Enter (but allow Shift+Enter for new lines)
+                messageInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        sendMessage();
+                    }
+                });
+                
+                // Send message function
+                function sendMessage() {
+                    const message = messageInput.value.trim();
+                    const contact = contactSelector.value.trim();
+                    
+                    if (!message || !contact) {
+                        alert('Please enter both a phone number and message');
+                        return;
+                    }
+                    
+                    if (!socket || !isConnected) {
+                        alert('WhatsApp is not connected');
+                        return;
+                    }
+                    
+                    // Format phone number
+                    let chatId = contact;
+                    if (!chatId.includes('@')) {
+                        // Clean phone number and add WhatsApp format
+                        chatId = chatId.replace(/[^0-9]/g, '');
+                        chatId = \`\${chatId}@s.whatsapp.net\`;
+                    }
+                    
+                    socket.emit("send_message", {
+                        chatId: chatId,
+                        message: message
                     });
                     
-                    function connectSocket(domain, accessToken) {
-                        log("Connecting to WhatsApp service...");
-                        socket = io({ 
-                            transports: ["websocket"], 
-                            reconnectionAttempts: 5, 
-                            reconnectionDelay: 1000 
-                        });
-                        
-                        socket.on("connect", function() {
-                            log("Socket.IO connected");
-                            socket.emit("initialize_whatsapp", { 
-                                domain: domain, 
-                                accessToken: accessToken,
-                                connectorId: 'bitrix24_whatsapp'
-                            });
-                            document.getElementById("step1").classList.remove("active");
-                            document.getElementById("step2").classList.add("active");
-                        });
-                        
-                        socket.on("connect_error", function(error) {
-                            log("Socket.IO connection error: " + error.message);
-                            document.getElementById("connectionStatus").className = "status error";
-                            document.getElementById("connectionStatus").textContent = "Socket.IO connection failed: " + error.message;
-                        });
-                        
-                        socket.on("connection_confirmed", function(data) {
-                            log(\`Socket connected: \${data.socketId}\`);
-                        });
-                        
-                        socket.on("qr_code", function(data) {
-                            if (!qrGenerated) {
-                                log("Generating QR code");
-                                try {
-                                    const qrCode = new QRious({
-                                        element: document.getElementById("qrCode"),
-                                        value: data.qr,
-                                        size: 200,
-                                        level: 'H'
-                                    });
-                                    document.getElementById("qrContainer").classList.remove("hidden");
-                                    document.getElementById("qrStatus").classList.remove("hidden");
-                                    qrGenerated = true;
-                                } catch (error) {
-                                    log("QR code rendering failed: " + error.message);
-                                    document.getElementById("connectionStatus").className = "status error";
-                                    document.getElementById("connectionStatus").textContent = "QR code rendering failed: " + error.message;
-                                }
-                            }
-                        });
-                        
-                        socket.on("status_update", function(status) {
-                            log("Status update: " + status.message);
-                            document.getElementById("qrStatus").textContent = status.message;
-                            document.getElementById("connectionStatus").textContent = status.message;
-                        });
-                        
-                        socket.on("whatsapp_connected", function(data) {
-                            log("WhatsApp connected");
-                            document.getElementById("step2").classList.remove("active");
-                            document.getElementById("step3").classList.add("active");
-                            document.getElementById("qrContainer").classList.add("hidden");
-                            document.getElementById("qrStatus").classList.add("hidden");
-                            document.getElementById("connectionStatus").className = "status success";
-                            document.getElementById("connectionStatus").textContent = "Connected to WhatsApp";
-                            document.getElementById("connectionInfo").classList.remove("hidden");
-                            document.getElementById("statusText").textContent = "Connected";
-                            document.getElementById("connectedSince").textContent = new Date(data.timestamp).toLocaleString();
-                            document.getElementById("disconnectBtn").classList.remove("hidden");
-                            
-                            // Enable chat interface
-                            document.getElementById("chatInterface").classList.add("active");
-                            document.getElementById("messageInput").disabled = false;
-                            document.getElementById("sendBtn").disabled = false;
-                            
-                            isConnected = true;
-                        });
-                        
-                        socket.on("message_received", function(messageData) {
-                            log("Message received: " + messageData.messageId);
-                            document.getElementById("lastMessage").textContent = new Date(messageData.timestamp).toLocaleString();
-                            
-                            // Add message to chat interface
-                            addMessage(messageData.text || messageData.body || "Media message", 'contact', messageData.timestamp);
-                            
-                            // Create contact in Bitrix24 if new number
-                            if (messageData.from && messageData.from.includes('@')) {
-                                const phoneNumber = messageData.from.split('@')[0];
-                                createOrUpdateBitrixContact(phoneNumber, messageData.text);
-                            }
-                        });
-                        
-                        socket.on("message_sent", function(data) {
-                            log("Message sent successfully");
-                            addMessage("Message sent", 'user', new Date().toISOString());
-                        });
-                        
-                        socket.on("error", function(error) {
-                            log("Error [" + error.type + "]: " + error.message);
-                            document.getElementById("connectionStatus").className = "status error";
-                            document.getElementById("connectionStatus").textContent = "Error: " + error.message;
-                            document.getElementById("qrContainer").classList.add("hidden");
-                            document.getElementById("qrStatus").classList.add("hidden");
-                        });
-                        
-                        socket.on("disconnect", function() {
-                            log("Socket.IO disconnected");
-                            document.getElementById("connectionStatus").className = "status error";
-                            document.getElementById("connectionStatus").textContent = "Disconnected";
-                            document.getElementById("connectionInfo").classList.add("hidden");
-                            document.getElementById("disconnectBtn").classList.add("hidden");
-                            document.getElementById("chatInterface").classList.remove("active");
-                            document.getElementById("messageInput").disabled = true;
-                            document.getElementById("sendBtn").disabled = true;
-                            isConnected = false;
-                            qrGenerated = false;
-                        });
-                    }
+                    // Add message to UI immediately
+                    addMessage(message, 'user', new Date().toISOString());
                     
-                    function createOrUpdateBitrixContact(phoneNumber, message) {
-                        if (!BX24) return;
-                        
-                        // Search for existing contact
-                        BX24.callMethod("crm.contact.list", {
-                            filter: { "PHONE": phoneNumber },
-                            select: ["ID", "NAME", "PHONE"]
-                        }, function(result) {
-                            if (result.error()) {
-                                log("Error searching contacts: " + result.error().getDescription());
-                                return;
-                            }
+                    // Clear input
+                    messageInput.value = '';
+                    messageInput.style.height = 'auto';
+                }
+                
+                sendBtn.addEventListener('click', sendMessage);
+                
+                disconnectBtn.addEventListener('click', function() {
+                    if (socket && isConnected) {
+                        socket.emit("disconnect_whatsapp");
+                        log("🔌 Disconnecting WhatsApp");
+                    }
+                });
+                
+                // Initialize Bitrix24 connection
+                BX24.init(function() {
+                    log("🔗 Bitrix24 API initialized");
+                    
+                    BX24.callMethod("user.current", {}, function(result) {
+                        if (result.error()) {
+                            document.getElementById("bitrixStatus").className = "status error";
+                            document.getElementById("bitrixStatus").textContent = "Bitrix24 connection failed";
+                            log("❌ Bitrix24 connection failed: " + result.error().getDescription());
+                        } else {
+                            const userData = result.data();
+                            document.getElementById("bitrixStatus").className = "status success";
+                            document.getElementById("bitrixStatus").textContent = "✅ Connected to Bitrix24 as " + userData.NAME;
+                            log("✅ Connected to Bitrix24 as " + userData.NAME);
                             
-                            const contacts = result.data();
-                            if (contacts.length > 0) {
-                                // Contact exists, add activity
-                                const contactId = contacts[0].ID;
-                                addBitrixActivity(contactId, message, phoneNumber);
-                            } else {
-                                // Create new contact
-                                BX24.callMethod("crm.contact.add", {
-                                    fields: {
-                                        "NAME": "WhatsApp Contact",
-                                        "PHONE": [{ "VALUE": phoneNumber, "VALUE_TYPE": "MOBILE" }],
-                                        "SOURCE_ID": "WEB",
-                                        "SOURCE_DESCRIPTION": "WhatsApp Connector"
-                                    }
-                                }, function(addResult) {
-                                    if (addResult.error()) {
-                                        log("Error creating contact: " + addResult.error().getDescription());
+                            // Mark step 1 as completed and move to step 2
+                            document.getElementById("step1").classList.remove("active");
+                            document.getElementById("step1").classList.add("completed");
+                            document.getElementById("step2").classList.add("active");
+                            
+                            // Get domain and access token
+                            currentDomain = "${domain}" || BX24.getDomain();
+                            currentAccessToken = "${accessToken}";
+                            
+                            if (!currentAccessToken) {
+                                BX24.getAuth(function(auth) {
+                                    if (auth && auth.access_token) {
+                                        currentAccessToken = auth.access_token;
+                                        log("🔑 Using OAuth access token");
+                                        connectSocket(currentDomain, currentAccessToken);
                                     } else {
-                                        const contactId = addResult.data();
-                                        log("Created new contact: " + contactId);
-                                        addBitrixActivity(contactId, message, phoneNumber);
+                                        log("❌ No access token available");
+                                        document.getElementById("bitrixStatus").className = "status error";
+                                        document.getElementById("bitrixStatus").textContent = "No access token available";
                                     }
                                 });
-                            }
-                        });
-                    }
-                    
-                    function addBitrixActivity(contactId, message, phoneNumber) {
-                        if (!BX24) return;
-                        
-                        BX24.callMethod("crm.activity.add", {
-                            fields: {
-                                "OWNER_TYPE_ID": 3, // Contact
-                                "OWNER_ID": contactId,
-                                "TYPE_ID": 1, // Call
-                                "SUBJECT": "WhatsApp Message",
-                                "DESCRIPTION": message,
-                                "DIRECTION": 2, // Incoming
-                                "COMMUNICATIONS": [{
-                                    "VALUE": phoneNumber,
-                                    "ENTITY_TYPE_ID": 3
-                                }]
-                            }
-                        }, function(result) {
-                            if (result.error()) {
-                                log("Error adding activity: " + result.error().getDescription());
                             } else {
-                                log("Added activity for contact " + contactId);
+                                connectSocket(currentDomain, currentAccessToken);
                             }
+                        }
+                    });
+                });
+                
+                function connectSocket(domain, accessToken) {
+                    log("🔌 Connecting to WhatsApp service...");
+                    socket = io({ 
+                        transports: ["websocket"], 
+                        reconnectionAttempts: 5, 
+                        reconnectionDelay: 1000 
+                    });
+                    
+                    socket.on("connect", function() {
+                        log("✅ Socket.IO connected");
+                        socket.emit("initialize_whatsapp", { 
+                            domain: domain, 
+                            accessToken: accessToken,
+                            connectorId: 'bitrix24_whatsapp'
                         });
-                    }
+                    });
                     
-                    // Send message functionality
-                    document.getElementById("sendBtn").addEventListener("click", function() {
-                        const messageInput = document.getElementById("messageInput");
-                        const message = messageInput.value.trim();
+                    socket.on("connect_error", function(error) {
+                        log("❌ Socket.IO connection error: " + error.message);
+                        document.getElementById("connectionStatus").className = "status error";
+                        document.getElementById("connectionStatus").textContent = "Connection failed: " + error.message;
+                    });
+                    
+                    socket.on("connection_confirmed", function(data) {
+                        log(\`✅ Socket connected: \${data.socketId}\`);
+                    });
+                    
+                    socket.on("qr_code", function(data) {
+                        if (!qrGenerated) {
+                            log("📱 Generating QR code");
+                            try {
+                                const qrCode = new QRious({
+                                    element: document.getElementById("qrCode"),
+                                    value: data.qr,
+                                    size: 200,
+                                    level: 'H'
+                                });
+                                document.getElementById("qrContainer").classList.remove("hidden");
+                                document.getElementById("qrStatus").classList.remove("hidden");
+                                document.getElementById("qrStatus").textContent = "📱 Scan QR code with WhatsApp";
+                                qrGenerated = true;
+                                log("✅ QR code displayed");
+                            } catch (error) {
+                                log("❌ QR code rendering failed: " + error.message);
+                            }
+                        }
+                    });
+                    
+                    socket.on("status_update", function(status) {
+                        log("📊 Status: " + status.message);
+                        document.getElementById("qrStatus").textContent = status.message;
+                        document.getElementById("connectionStatus").textContent = status.message;
+                    });
+                    
+                    socket.on("whatsapp_connected", function(data) {
+                        log("🎉 WhatsApp connected successfully!");
                         
-                        if (message && socket && isConnected) {
-                            // For demo purposes, we'll send to a default chat
-                            // In real implementation, you'd have a contact selector
-                            const chatId = "demo@c.us"; // This should be dynamic
-                            
-                            socket.emit("send_message", {
-                                chatId: chatId,
-                                message: message
+                        // Update UI to show successful connection
+                        document.getElementById("step2").classList.remove("active");
+                        document.getElementById("step2").classList.add("completed");
+                        document.getElementById("step3").classList.add("completed");
+                        
+                        document.getElementById("connectionStatus").className = "status success";
+                        document.getElementById("connectionStatus").textContent = "✅ WhatsApp connected successfully!";
+                        
+                        // Hide QR code
+                        document.getElementById("qrContainer").classList.add("hidden");
+                        document.getElementById("qrStatus").classList.add("hidden");
+                        
+                        isConnected = true;
+                        
+                        // CRITICAL: Switch to chat interface after successful connection
+                        setTimeout(() => {
+                            showChatInterface();
+                        }, 1500); // Small delay to let user see the success message
+                    });
+                    
+                    socket.on("message_received", function(messageData) {
+                        log("📨 Message received: " + messageData.messageId);
+                        
+                        // Extract phone number from WhatsApp ID
+                        const phone = messageData.from ? messageData.from.split('@')[0] : 'Unknown';
+                        
+                        // Add message to chat interface
+                        addMessage(
+                            messageData.text || messageData.body || "📎 Media message", 
+                            'received', 
+                            messageData.timestamp || new Date().toISOString(),
+                            phone
+                        );
+                        
+                        // Auto-populate contact selector with sender's number
+                        if (!contactSelector.value && phone !== 'Unknown') {
+                            contactSelector.value = phone;
+                        }
+                        
+                        // Create contact in Bitrix24 if new number
+                        if (messageData.from && messageData.from.includes('@')) {
+                            createOrUpdateBitrixContact(phone, messageData.text);
+                        }
+                    });
+                    
+                    socket.on("message_sent", function(data) {
+                        log("✅ Message sent successfully");
+                    });
+                    
+                    socket.on("error", function(error) {
+                        log("❌ Error [" + error.type + "]: " + error.message);
+                        document.getElementById("connectionStatus").className = "status error";
+                        document.getElementById("connectionStatus").textContent = "Error: " + error.message;
+                    });
+                    
+                    socket.on("disconnect", function() {
+                        log("🔌 Socket.IO disconnected");
+                        isConnected = false;
+                        qrGenerated = false;
+                        
+                        // Switch back to setup interface
+                        setupContainer.style.display = 'flex';
+                        chatContainer.classList.remove('active');
+                        
+                        // Reset UI
+                        document.getElementById("connectionStatus").className = "status error";
+                        document.getElementById("connectionStatus").textContent = "Disconnected";
+                        contactSelector.disabled = true;
+                        messageInput.disabled = true;
+                        sendBtn.disabled = true;
+                        
+                        // Reset steps
+                        document.getElementById("step1").classList.add("active");
+                        document.getElementById("step1").classList.remove("completed");
+                        document.getElementById("step2").classList.remove("active", "completed");
+                        document.getElementById("step3").classList.remove("active", "completed");
+                    });
+                }
+                
+                function createOrUpdateBitrixContact(phoneNumber, message) {
+                    if (!BX24) return;
+                    
+                    // Search for existing contact
+                    BX24.callMethod("crm.contact.list", {
+                        filter: { "PHONE": phoneNumber },
+                        select: ["ID", "NAME", "PHONE"]
+                    }, function(result) {
+                        if (result.error()) {
+                            log("❌ Error searching contacts: " + result.error().getDescription());
+                            return;
+                        }
+                        
+                        const contacts = result.data();
+                        if (contacts.length > 0) {
+                            // Contact exists, add activity
+                            const contactId = contacts[0].ID;
+                            addBitrixActivity(contactId, message, phoneNumber);
+                        } else {
+                            // Create new contact
+                            BX24.callMethod("crm.contact.add", {
+                                fields: {
+                                    "NAME": \`WhatsApp Contact +\${phoneNumber}\`,
+                                    "PHONE": [{ "VALUE": phoneNumber, "VALUE_TYPE": "MOBILE" }],
+                                    "SOURCE_ID": "WEB",
+                                    "SOURCE_DESCRIPTION": "WhatsApp Connector"
+                                }
+                            }, function(addResult) {
+                                if (addResult.error()) {
+                                    log("❌ Error creating contact: " + addResult.error().getDescription());
+                                } else {
+                                    const contactId = addResult.data();
+                                    log("✅ Created new contact: " + contactId);
+                                    addBitrixActivity(contactId, message, phoneNumber);
+                                }
                             });
-                            
-                            messageInput.value = "";
-                            addMessage(message, 'user', new Date().toISOString());
                         }
                     });
+                }
+                
+                function addBitrixActivity(contactId, message, phoneNumber) {
+                    if (!BX24) return;
                     
-                    document.getElementById("messageInput").addEventListener("keypress", function(e) {
-                        if (e.key === "Enter") {
-                            document.getElementById("sendBtn").click();
+                    BX24.callMethod("crm.activity.add", {
+                        fields: {
+                            "OWNER_TYPE_ID": 3, // Contact
+                            "OWNER_ID": contactId,
+                            "TYPE_ID": 1, // Call
+                            "SUBJECT": "WhatsApp Message",
+                            "DESCRIPTION": message,
+                            "DIRECTION": 2, // Incoming
+                            "COMMUNICATIONS": [{
+                                "VALUE": phoneNumber,
+                                "ENTITY_TYPE_ID": 3
+                            }]
+                        }
+                    }, function(result) {
+                        if (result.error()) {
+                            log("❌ Error adding activity: " + result.error().getDescription());
+                        } else {
+                            log("✅ Added activity for contact " + contactId);
                         }
                     });
-                    
-                    document.getElementById("disconnectBtn").addEventListener("click", function() {
-                        if (socket && isConnected) {
-                            socket.emit("disconnect_whatsapp");
-                            log("Disconnecting WhatsApp");
-                            document.getElementById("connectionStatus").className = "status info";
-                            document.getElementById("connectionStatus").textContent = "Disconnecting...";
-                            document.getElementById("step3").classList.remove("active");
-                            document.getElementById("step2").classList.add("active");
-                        }
-                    });
-                </script>
-            </body>
-            </html>
-        `;
-    }
-
+                }
+            </script>
+        </body>
+        </html>
+    `;
+}
     function getWhatsAppConnectorHTML() {
         return `
             <!DOCTYPE html>
