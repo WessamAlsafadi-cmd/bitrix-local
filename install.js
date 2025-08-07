@@ -343,18 +343,19 @@ try {
         }
     });
 
-    app.get('/install.js', function(req, res) {
+    app.get('/install.js', (req, res) => {
     console.log('📦 Install.js route accessed');
-    console.log('📋 Query params: ' + JSON.stringify(req.query));
-    console.log('📋 Headers: ' + JSON.stringify(req.headers));
-    console.log('📋 Referer: ' + req.headers.referer);
+    console.log('📋 Query params:', req.query);
+    console.log('📋 Headers:', req.headers);
+    console.log('📋 Referer:', req.headers.referer);
     
     let domain = req.query.DOMAIN || req.query.domain;
+    
     if (!domain && req.headers.referer) {
         try {
             const refererUrl = new URL(req.headers.referer);
             domain = refererUrl.hostname;
-            console.log('🔍 Extracted domain from referer: ' + domain);
+            console.log('🔍 Extracted domain from referer:', domain);
         } catch (e) {
             console.log('❌ Could not parse referer URL');
         }
@@ -364,51 +365,33 @@ try {
         return res.send(getBitrix24DomainFormHTML());
     }
     
-    console.log('🔐 Creating OAuth URL for domain: ' + domain);
-    console.log('🔐 Using APP_ID: ' + process.env.APP_ID);
-    console.log('🔐 Using BASE_URL: ' + process.env.BASE_URL);
-    console.log('🔐 Using scopes: ' + APP_SCOPE);
+    console.log('🔐 Creating OAuth URL for domain:', domain);
+    console.log('🔐 Using APP_ID:', process.env.APP_ID);
+    console.log('🔐 Using scopes:', APP_SCOPE);
     
-    const authUrl = `https://${domain}/oauth/authorize/?${querystring.stringify({
+    const authUrl = `https://${domain}/oauth/authorize/?` + querystring.stringify({
         client_id: process.env.APP_ID,
         response_type: 'code',
         scope: APP_SCOPE,
         redirect_uri: `${process.env.BASE_URL}/oauth/callback`,
-        state: encodeURIComponent(JSON.stringify({ domain: domain }))
-    })}`;
+        state: encodeURIComponent(JSON.stringify({ domain })) // Pass domain in state
+    });
     
-    console.log('🌐 OAuth URL: ' + authUrl);
+    console.log('🌐 OAuth URL:', authUrl);
+    
     res.send(`
         <!DOCTYPE html>
         <html>
         <head>
             <title>Installing WhatsApp Connector</title>
-            <style>
-                body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-                .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #25D366; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 20px auto; }
-                @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-                .debug { background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px; text-align: left; }
-                pre { background: #e9ecef; padding: 10px; border-radius: 4px; }
-            </style>
+            <style>body { font-family: Arial; text-align: center; padding: 50px; } .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #25D366; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 20px auto; } @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }</style>
         </head>
         <body>
             <h2>📱 Installing WhatsApp Connector</h2>
             <div class="spinner"></div>
             <p>Domain: <strong>${domain}</strong></p>
             <p>Redirecting to Bitrix24 authorization...</p>
-            <div class="debug">
-                <h4>Debug Information:</h4>
-                <pre>Domain: ${domain}
-APP_ID: ${process.env.APP_ID}
-BASE_URL: ${process.env.BASE_URL}
-OAuth URL: ${authUrl}</pre>
-            </div>
-            <script>
-                console.log("Redirecting to: ${authUrl}");
-                setTimeout(function() {
-                    window.location.href = "${authUrl}";
-                }, 2000);
-            </script>
+            <script>window.location.href = '${authUrl}';</script>
         </body>
         </html>
     `);
@@ -434,10 +417,10 @@ OAuth URL: ${authUrl}</pre>
     });
 });
 // #1: Fix the POST /install.js route
-app.post('/install.js', async function(req, res) {
+app.post('/install.js', async (req, res) => {
     console.log('📦 POST Install.js route accessed');
-    console.log('📋 Body: ' + JSON.stringify(req.body));
-    console.log('📋 Headers: ' + JSON.stringify(req.headers));
+    console.log('📋 Body:', req.body);
+    console.log('📋 Headers:', req.headers);
     
     const authId = req.body.AUTH_ID;
     const memberId = req.body.member_id;
@@ -445,33 +428,29 @@ app.post('/install.js', async function(req, res) {
     
     if (authId && memberId) {
         console.log('✅ Bitrix24 installation request detected');
-        console.log('🔑 AUTH_ID: ' + authId);
-        console.log('👤 Member ID: ' + memberId);
+        console.log('🔑 AUTH_ID:', authId);
+        console.log('👤 Member ID:', memberId);
         
         let domain = null;
         if (req.headers.referer) {
             try {
                 const refererUrl = new URL(req.headers.referer);
                 domain = refererUrl.hostname;
-                console.log('🔍 Extracted domain from referer: ' + domain);
+                console.log('🔍 Extracted domain from referer:', domain);
             } catch (e) {
                 console.log('❌ Could not parse referer URL');
             }
         }
         
         if (domain && domain.includes('bitrix24')) {
-            console.log('🚀 Redirecting to OAuth for domain: ' + domain);
-            
-            // FIXED: Add domain as state parameter
-            const authUrl = `https://${domain}/oauth/authorize/?${querystring.stringify({
-                client_id: APP_ID,
+            console.log('🚀 Redirecting to OAuth for domain:', domain);
+            const authUrl = `https://${domain}/oauth/authorize/?` + querystring.stringify({
+                client_id: process.env.APP_ID,
                 response_type: 'code',
                 scope: APP_SCOPE,
-                redirect_uri: `${BASE_URL}/oauth/callback`,
-                state: encodeURIComponent(JSON.stringify({ domain: domain })) // Pass domain in state
-            })}`;
-            
-            console.log('🌐 OAuth URL: ' + authUrl);
+                redirect_uri: `${process.env.BASE_URL}/oauth/callback`,
+                state: encodeURIComponent(JSON.stringify({ domain }))
+            });
             return res.redirect(authUrl);
         } else {
             console.log('⚠️ Bitrix24 installation detected but no domain found');
@@ -481,20 +460,19 @@ app.post('/install.js', async function(req, res) {
     
     const domain = req.body.domain || req.body.DOMAIN;
     if (domain) {
-        const authUrl = `https://${domain}/oauth/authorize/?${querystring.stringify({
-            client_id: APP_ID,
+        const authUrl = `https://${domain}/oauth/authorize/?` + querystring.stringify({
+            client_id: process.env.APP_ID,
             response_type: 'code',
             scope: APP_SCOPE,
-            redirect_uri: `${BASE_URL}/oauth/callback`,
-            state: encodeURIComponent(JSON.stringify({ domain: domain }))
-        })}`;
+            redirect_uri: `${process.env.BASE_URL}/oauth/callback`,
+            state: encodeURIComponent(JSON.stringify({ domain }))
+        });
         return res.redirect(authUrl);
     }
     
     console.log('❌ Insufficient data for installation');
     return res.status(400).send(getInstallationErrorHTML());
-});
-    
+});    
     function getBitrix24InstallationFormHTML(authId, memberId) {
         return `
             <!DOCTYPE html>
@@ -735,10 +713,10 @@ app.post('/install.js', async function(req, res) {
     });
 
     app.get('/oauth/callback', async (req, res) => {
-    console.log('🔐 OAuth callback received');
+    console.log('🔐 OAuth callback received at', new Date().toISOString());
     console.log('📋 Query params:', req.query);
     const code = req.query.code;
-    const domain = req.query.domain || 'yourcompany.bitrix24.com';
+    const domain = req.query.state ? JSON.parse(decodeURIComponent(req.query.state)).domain : req.query.domain || 'testhamidjuly25.bitrix24.in';
     
     if (!code) {
         console.error('❌ No authorization code received');
@@ -755,19 +733,20 @@ app.post('/install.js', async function(req, res) {
             redirect_uri: `${process.env.BASE_URL}/oauth/callback`
         });
         
+        console.log('📤 Sending token request to:', tokenUrl);
         const tokenResponse = await axios.post(tokenUrl, tokenParams, {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            timeout: 10000 // Added timeout to prevent hanging
         });
-        console.log('Token response:', tokenResponse.data);
+        console.log('✅ Token response:', tokenResponse.data);
         
         const accessToken = tokenResponse.data.access_token;
-        res.redirect(`/app?domain=${domain}&access_token=${accessToken}`);
+        res.redirect(`/app?domain=${encodeURIComponent(domain)}&access_token=${encodeURIComponent(accessToken)}`);
     } catch (error) {
-        console.error('❌ Token exchange failed:', error.message);
-        res.status(500).send('Failed to exchange token');
+        console.error('❌ Token exchange failed:', error.message, error.response?.data);
+        res.status(500).send('Failed to exchange token. Check server logs.');
     }
 });
-
 app.get('/app', (req, res) => {
     console.log('🎯 App route accessed');
     console.log('📋 Query params:', req.query);
