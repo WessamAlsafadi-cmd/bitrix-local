@@ -2024,3 +2024,7 @@ try {
                         contactSelectorMain.disabled = false;
                         messageInputMain.disabled = false
 }
+</script>
+</body>
+</html>
+`}
