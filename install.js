@@ -2023,3 +2023,4 @@ try {
                         sendBtn.disabled = false;
                         contactSelectorMain.disabled = false;
                         messageInputMain.disabled = false
+}
