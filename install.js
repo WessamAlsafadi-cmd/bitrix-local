@@ -1978,6 +1978,8 @@ try {
     process.exit(1);
 }
 
+// ... (rest of your code remains the same until the getBitrix24InstallationFormHTML function)
+
 function getBitrix24InstallationFormHTML(authId, memberId) {
     return `
         <!DOCTYPE html>
@@ -1987,14 +1989,52 @@ function getBitrix24InstallationFormHTML(authId, memberId) {
             <style>
                 body { font-family: Arial, sans-serif; max-width: 500px; margin: 100px auto; padding: 20px; }
                 .form { background: #f8f9fa; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-                input { width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #ddd; border-radius: 5px; font-size: 16px; }
+                input { width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #ddd; border-radius: 5px; font-size: 16px; box-sizing: border-box; }
                 button { background: #25D366; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; }
                 button:hover { background: #128C7E; }
                 .help { background: #e3f2fd; padding: 15px; border-radius: 5px; margin: 15px 0; }
+                .info { background: #fff3cd; padding: 15px; border-radius: 5px; margin: 15px 0; color: #856404; }
             </style>
         </head>
         <body>
             <div class="form">
                 <h2>📱 WhatsApp Connector Installation</h2>
+                <div class="info">
+                    <strong>✅ Bitrix24 Installation Detected</strong><br>
+                    Auth ID: ${authId ? authId.substring(0, 20) + '...' : 'Not available'}<br>
+                    Member ID: ${memberId || 'Not available'}
+                </div>
                 <p>Please enter your Bitrix24 domain to continue:</p>
-                <
+                <form method="POST" action="/install.js">
+                    <input type="hidden" name="authId" value="${authId || ''}">
+                    <input type="hidden" name="memberId" value="${memberId || ''}">
+                    <input type="text" 
+                           name="domain" 
+                           placeholder="yourcompany.bitrix24.com" 
+                           pattern="[a-zA-Z0-9.-]+\\.bitrix24\\.(com|net|ru|de|fr|es|it|pl|ua|kz|by)"
+                           required>
+                    <button type="submit">Continue Installation</button>
+                </form>
+                <div class="help">
+                    <strong>💡 How to find your domain:</strong><br>
+                    Look at your Bitrix24 URL. If it's <code>https://mycompany.bitrix24.com</code>,
+                    then enter <code>mycompany.bitrix24.com</code>
+                </div>
+            </div>
+            <script>
+                // Auto-detect domain from referrer if possible
+                if (document.referrer) {
+                    try {
+                        const url = new URL(document.referrer);
+                        if (url.hostname.includes("bitrix24")) {
+                            document.querySelector("input[name='domain']").value = url.hostname;
+                        }
+                    } catch (e) {
+                        console.log("Could not auto-detect domain");
+                    }
+                }
+            </script>
+        </body>
+        </html>
+    `;
+}
