@@ -1516,13 +1516,12 @@ try {
                             log("Error [" + error.type + "]: " + error.message);
                             if (error.type === 'token_expired' || error.message.includes('401')) {
                                 document.getElementById("connectionStatus").className = "status error";
-                                document.getElementById("connectionStatus").innerHTML = `
-                                    <strong>Token Expired</strong><br>
-                                    Your Bitrix24 access token has expired. Please reconnect the application:<br>
+                                document.getElementById("connectionStatus").innerHTML = "
+                                    Token Expired<br>
+                                    Your Bitrix24 access token has expired, Please reconnect the application:<br>
                                     <button onclick="reconnectBitrix24()" style="margin-top: 10px; padding: 8px 16px; background: #25D366; color: white; border: none; border-radius: 4px; cursor: pointer;">
                                         🔄 Reconnect
-                                    </button>
-                                `;
+                                    </button>";
                             } else {
                                 document.getElementById("connectionStatus").className = "status error";
                                 document.getElementById("connectionStatus").textContent = "Error: " + error.message;
