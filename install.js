@@ -48,9 +48,10 @@ try {
 
     console.log('🚀 Bitrix24 WhatsApp Connector Server configuration complete.');
 
-    // Store WhatsApp handler instances per socket
+    // Store WhatsApp handler instances per socket with better management
     const whatsappHandlers = new Map();
     const activeConnections = new Map();
+    const connectionCleanupTimeouts = new Map();
 
     // --- Webhook endpoint for Bitrix24 events ---
     app.post('/webhook', async (req, res) => {
@@ -140,175 +141,491 @@ try {
         }
     }
 
-    // --- Enhanced Socket.IO Logic ---
+    // Enhanced Socket.IO Logic with better error handling and QR management
     io.on('connection', function(socket) {
-        console.log('👤 User connected: ' + socket.id);
+        console.log('👤 User connected:', socket.id, 'at', new Date().toISOString());
+        console.log('📊 Total connections:', io.engine.clientsCount);
+        
+        // Send initial connection confirmation
+        socket.emit('connection_confirmed', {
+            socketId: socket.id,
+            timestamp: new Date().toISOString(),
+            serverStatus: 'ready'
+        });
 
+        // Enhanced WhatsApp initialization with better error handling
         socket.on('initialize_whatsapp', async function(data) {
             try {
-                console.log('🔄 Initializing WhatsApp for user: ' + socket.id);
-                console.log('📋 Received data: { domain: ' + data.domain + ', hasToken: ' + !!data.accessToken + ' }');
+                console.log('🔄 WhatsApp initialization request from:', socket.id);
+                console.log('📋 Initialization data:', {
+                    domain: data.domain,
+                    hasAccessToken: !!data.accessToken,
+                    connectorId: data.connectorId,
+                    timestamp: new Date().toISOString()
+                });
                 
+                // Validate required parameters
                 if (!data.domain || !data.accessToken) {
-                    console.error('❌ Missing domain or access token');
-                    socket.emit('error', 'Missing domain or access token');
+                    console.error('❌ Missing required parameters for socket:', socket.id);
+                    socket.emit('error', {
+                        type: 'missing_params',
+                        message: 'Missing domain or access token',
+                        timestamp: new Date().toISOString()
+                    });
                     return;
                 }
                 
+                // Validate domain format
+                if (!data.domain.includes('bitrix24')) {
+                    console.error('❌ Invalid domain format for socket:', socket.id);
+                    socket.emit('error', {
+                        type: 'invalid_domain',
+                        message: 'Invalid Bitrix24 domain format',
+                        timestamp: new Date().toISOString()
+                    });
+                    return;
+                }
+                
+                // Clean up any existing handler for this socket
+                await cleanupSocketHandler(socket.id);
+                
+                // Store connection info
                 activeConnections.set(socket.id, {
                     domain: data.domain,
                     accessToken: data.accessToken,
-                    connectedAt: new Date()
+                    connectedAt: new Date().toISOString(),
+                    lastActivity: new Date().toISOString(),
+                    status: 'initializing'
                 });
                 
+                console.log('🏗️ Creating WhatsApp handler for socket:', socket.id);
+                
+                // Create new WhatsApp handler with enhanced configuration
                 const whatsappHandler = new WhatsAppBitrix24Handler({
                     bitrix24Domain: data.domain,
                     accessToken: data.accessToken,
-                    connectorId: 'custom_whatsapp'
+                    connectorId: data.connectorId || 'custom_whatsapp',
+                    authDir: `./auth_${socket.id}`, // Unique auth directory per socket
+                    socketId: socket.id
                 });
                 
+                // Store the handler
                 whatsappHandlers.set(socket.id, whatsappHandler);
                 
-                whatsappHandler.on('qr', function(qr) {
-                    console.log('📱 QR Code received for socket: ' + socket.id);
-                    console.log('📱 QR Code length: ' + qr.length);
-                    console.log('📱 QR Code preview: ' + qr.substring(0, 50) + '...');
-                    try {
-                        socket.emit('qr_code', qr);
-                        console.log('✅ QR Code emitted to client');
-                    } catch (emitError) {
-                        console.error('❌ Failed to emit QR code: ' + emitError);
-                    }
+                // Set up enhanced event listeners with error handling
+                setupHandlerEventListeners(socket, whatsappHandler);
+                
+                // Update connection status
+                const connection = activeConnections.get(socket.id);
+                if (connection) {
+                    connection.status = 'handler_created';
+                    connection.lastActivity = new Date().toISOString();
+                }
+                
+                console.log('🚀 Starting WhatsApp initialization for socket:', socket.id);
+                socket.emit('status_update', {
+                    type: 'info',
+                    message: 'Initializing WhatsApp connection...',
+                    timestamp: new Date().toISOString()
                 });
                 
-                whatsappHandler.on('status', function(status) {
-                    console.log('📊 Status update for socket ' + socket.id + ': ' + status);
-                    try {
-                        socket.emit('status_update', status);
-                    } catch (emitError) {
-                        console.error('❌ Failed to emit status: ' + emitError);
-                    }
-                });
+                // Initialize WhatsApp with timeout protection
+                const initTimeout = setTimeout(() => {
+                    console.warn('⚠️ WhatsApp initialization timeout for socket:', socket.id);
+                    socket.emit('error', {
+                        type: 'init_timeout',
+                        message: 'WhatsApp initialization timed out. Please try again.',
+                        timestamp: new Date().toISOString()
+                    });
+                }, 60000); // 60 second timeout
                 
-                whatsappHandler.on('connected', function() {
-                    console.log('✅ WhatsApp connected for socket: ' + socket.id);
-                    try {
-                        socket.emit('whatsapp_connected');
-                    } catch (emitError) {
-                        console.error('❌ Failed to emit connected event: ' + emitError);
-                    }
-                });
-                
-                whatsappHandler.on('message_received', function(messageData) {
-                    console.log('📨 Message received for socket ' + socket.id + ': ' + messageData.messageId);
-                    try {
-                        socket.emit('message_received', messageData);
-                    } catch (emitError) {
-                        console.error('❌ Failed to emit message: ' + emitError);
-                    }
-                });
-                
-                whatsappHandler.on('error', function(error) {
-                    console.error('❌ WhatsApp handler error for socket ' + socket.id + ': ' + error);
-                    try {
-                        socket.emit('error', error.message || error);
-                    } catch (emitError) {
-                        console.error('❌ Failed to emit error: ' + emitError);
-                    }
-                });
-                
-                console.log('🚀 Starting WhatsApp initialization...');
-                await whatsappHandler.initWhatsApp();
+                try {
+                    await whatsappHandler.initWhatsApp();
+                    clearTimeout(initTimeout);
+                } catch (initError) {
+                    clearTimeout(initTimeout);
+                    throw initError;
+                }
                 
             } catch (error) {
-                console.error('❌ Error initializing WhatsApp for socket ' + socket.id + ': ' + error);
-                socket.emit('error', error.message);
-                whatsappHandlers.delete(socket.id);
-                activeConnections.delete(socket.id);
+                console.error('❌ Error initializing WhatsApp for socket', socket.id + ':', error.message);
+                console.error('📊 Error stack:', error.stack);
+                
+                socket.emit('error', {
+                    type: 'init_error',
+                    message: error.message,
+                    timestamp: new Date().toISOString()
+                });
+                
+                // Cleanup on error
+                await cleanupSocketHandler(socket.id);
             }
         });
 
+        // Enhanced message sending with validation
         socket.on('send_message', async function(data) {
             try {
+                console.log('📤 Send message request from socket:', socket.id);
+                
                 const handler = whatsappHandlers.get(socket.id);
                 if (!handler) {
-                    socket.emit('error', 'WhatsApp not connected');
+                    socket.emit('error', {
+                        type: 'no_handler',
+                        message: 'WhatsApp not connected. Please initialize first.',
+                        timestamp: new Date().toISOString()
+                    });
                     return;
+                }
+                
+                // Validate message data
+                if (!data.chatId || !data.message) {
+                    socket.emit('error', {
+                        type: 'invalid_message_data',
+                        message: 'Missing chatId or message content',
+                        timestamp: new Date().toISOString()
+                    });
+                    return;
+                }
+                
+                // Update last activity
+                const connection = activeConnections.get(socket.id);
+                if (connection) {
+                    connection.lastActivity = new Date().toISOString();
                 }
                 
                 const { chatId, message, files } = data;
-                await handler.sendOutgoingMessage(chatId, message, files);
-                socket.emit('message_sent', { success: true });
-            } catch (error) {
-                console.error('❌ Error sending message for socket ' + socket.id + ': ' + error);
-                socket.emit('error', error.message);
-            }
-        });
-
-        socket.on('send_whatsapp_message', async function(data) {
-            try {
-                const handler = whatsappHandlers.get(socket.id);
-                if (!handler) {
-                    socket.emit('error', 'WhatsApp not connected');
-                    return;
-                }
+                console.log('📨 Sending message to:', chatId, 'length:', message.length);
                 
-                const { chatId, message } = data;
-                await handler.sendOutgoingMessage(chatId, message);
-                socket.emit('message_sent', { success: true });
+                await handler.sendOutgoingMessage(chatId, message, files);
+                
+                socket.emit('message_sent', { 
+                    success: true,
+                    chatId: chatId,
+                    timestamp: new Date().toISOString()
+                });
+                
             } catch (error) {
-                console.error('❌ Error sending WhatsApp message for socket ' + socket.id + ': ' + error);
-                socket.emit('error', error.message);
+                console.error('❌ Error sending message for socket', socket.id + ':', error.message);
+                socket.emit('error', {
+                    type: 'send_error',
+                    message: error.message,
+                    timestamp: new Date().toISOString()
+                });
             }
         });
 
+        // Simplified send_whatsapp_message (alias for send_message)
+        socket.on('send_whatsapp_message', function(data) {
+            socket.emit('send_message', data);
+        });
+
+        // Enhanced status request with detailed info
         socket.on('get_status', function() {
             try {
                 const handler = whatsappHandlers.get(socket.id);
+                const connection = activeConnections.get(socket.id);
+                
+                let status = {
+                    connected: false,
+                    whatsappConnected: false,
+                    activeSessions: 0,
+                    socketId: socket.id,
+                    timestamp: new Date().toISOString()
+                };
+                
                 if (handler) {
-                    const status = handler.getConnectionStatus();
-                    socket.emit('status_response', status);
-                } else {
-                    socket.emit('status_response', { 
-                        connected: false, 
-                        activeSessions: 0,
-                        whatsappConnected: false
-                    });
+                    const handlerStatus = handler.getConnectionStatus();
+                    status = {
+                        ...status,
+                        ...handlerStatus,
+                        connected: true
+                    };
                 }
+                
+                if (connection) {
+                    status.connectionInfo = {
+                        domain: connection.domain,
+                        connectedAt: connection.connectedAt,
+                        lastActivity: connection.lastActivity,
+                        status: connection.status
+                    };
+                }
+                
+                console.log('📊 Status request from socket:', socket.id, 'Status:', status.whatsappConnected ? 'Connected' : 'Disconnected');
+                socket.emit('status_response', status);
+                
             } catch (error) {
-                console.error('❌ Error getting status for socket ' + socket.id + ': ' + error);
-                socket.emit('error', 'Failed to get status');
+                console.error('❌ Error getting status for socket', socket.id + ':', error.message);
+                socket.emit('error', {
+                    type: 'status_error',
+                    message: 'Failed to get status',
+                    timestamp: new Date().toISOString()
+                });
             }
         });
 
+        // Enhanced disconnect handling
         socket.on('disconnect_whatsapp', async function() {
             try {
-                const handler = whatsappHandlers.get(socket.id);
-                if (handler) {
-                    console.log('🔌 Disconnecting WhatsApp for socket: ' + socket.id);
-                    await handler.disconnect();
-                    whatsappHandlers.delete(socket.id);
-                }
-                socket.emit('status_update', 'WhatsApp disconnected');
+                console.log('🔌 Manual WhatsApp disconnect requested by socket:', socket.id);
+                await cleanupSocketHandler(socket.id);
+                
+                socket.emit('status_update', {
+                    type: 'info',
+                    message: 'WhatsApp disconnected',
+                    timestamp: new Date().toISOString()
+                });
+                
             } catch (error) {
-                console.error('❌ Error disconnecting WhatsApp for socket ' + socket.id + ': ' + error);
-                socket.emit('error', error.message);
+                console.error('❌ Error disconnecting WhatsApp for socket', socket.id + ':', error.message);
+                socket.emit('error', {
+                    type: 'disconnect_error',
+                    message: error.message,
+                    timestamp: new Date().toISOString()
+                });
             }
         });
 
-        socket.on('disconnect', async function() {
-            console.log('👋 User disconnected: ' + socket.id);
+        // Restart connection functionality
+        socket.on('restart_connection', async function() {
             try {
+                console.log('🔄 Connection restart requested by socket:', socket.id);
+                
                 const handler = whatsappHandlers.get(socket.id);
                 if (handler) {
-                    console.log('🧹 Cleaning up WhatsApp handler for socket: ' + socket.id);
-                    await handler.cleanup();
-                    whatsappHandlers.delete(socket.id);
+                    socket.emit('status_update', {
+                        type: 'info',
+                        message: 'Restarting WhatsApp connection...',
+                        timestamp: new Date().toISOString()
+                    });
+                    
+                    await handler.restartConnection();
+                } else {
+                    socket.emit('error', {
+                        type: 'no_handler',
+                        message: 'No active WhatsApp connection to restart',
+                        timestamp: new Date().toISOString()
+                    });
                 }
-                activeConnections.delete(socket.id);
+                
             } catch (error) {
-                console.error('❌ Error during disconnect cleanup for socket ' + socket.id + ': ' + error);
+                console.error('❌ Error restarting connection for socket', socket.id + ':', error.message);
+                socket.emit('error', {
+                    type: 'restart_error',
+                    message: error.message,
+                    timestamp: new Date().toISOString()
+                });
             }
+        });
+
+        // Ping/pong for connection health monitoring
+        socket.on('ping', function() {
+            const connection = activeConnections.get(socket.id);
+            if (connection) {
+                connection.lastActivity = new Date().toISOString();
+            }
+            socket.emit('pong', { timestamp: new Date().toISOString() });
+        });
+
+        // Handle client disconnect with cleanup
+        socket.on('disconnect', async function(reason) {
+            console.log('👋 User disconnected:', socket.id, 'Reason:', reason, 'at', new Date().toISOString());
+            
+            try {
+                // Set cleanup timeout to allow for reconnection
+                const cleanupTimeout = setTimeout(async () => {
+                    console.log('🧹 Cleaning up resources for socket:', socket.id);
+                    await cleanupSocketHandler(socket.id);
+                }, 30000); // 30 second grace period
+                
+                connectionCleanupTimeouts.set(socket.id, cleanupTimeout);
+                
+            } catch (error) {
+                console.error('❌ Error during disconnect cleanup for socket', socket.id + ':', error.message);
+            }
+            
+            console.log('📊 Remaining connections:', io.engine.clientsCount);
+        });
+    });
+
+    // Helper function to setup handler event listeners
+    function setupHandlerEventListeners(socket, handler) {
+        // QR code handling with enhanced error management
+        handler.on('qr', function(qr) {
+            console.log('📱 QR Code generated for socket:', socket.id);
+            console.log('📱 QR Code stats:', {
+                length: qr.length,
+                preview: qr.substring(0, 50) + '...',
+                timestamp: new Date().toISOString()
+            });
+            
+            try {
+                socket.emit('qr_code', {
+                    qr: qr,
+                    timestamp: new Date().toISOString()
+                });
+                console.log('✅ QR Code emitted to socket:', socket.id);
+            } catch (emitError) {
+                console.error('❌ Failed to emit QR code to socket', socket.id + ':', emitError.message);
+                socket.emit('error', {
+                    type: 'qr_emit_error',
+                    message: 'Failed to send QR code to client',
+                    timestamp: new Date().toISOString()
+                });
+            }
+        });
+        
+        // Status updates with enhanced formatting
+        handler.on('status', function(status) {
+            console.log('📊 Status update for socket', socket.id + ':', status);
+            
+            try {
+                socket.emit('status_update', {
+                    type: 'info',
+                    message: status,
+                    timestamp: new Date().toISOString()
+                });
+                
+                // Update connection status
+                const connection = activeConnections.get(socket.id);
+                if (connection) {
+                    connection.status = status;
+                    connection.lastActivity = new Date().toISOString();
+                }
+                
+            } catch (emitError) {
+                console.error('❌ Failed to emit status to socket', socket.id + ':', emitError.message);
+            }
+        });
+        
+        // Connection success handling
+        handler.on('connected', function() {
+            console.log('✅ WhatsApp connected successfully for socket:', socket.id);
+            
+            try {
+                socket.emit('whatsapp_connected', {
+                    timestamp: new Date().toISOString(),
+                    message: 'WhatsApp connected successfully!'
+                });
+                
+                // Update connection status
+                const connection = activeConnections.get(socket.id);
+                if (connection) {
+                    connection.status = 'connected';
+                    connection.lastActivity = new Date().toISOString();
+                }
+                
+            } catch (emitError) {
+                console.error('❌ Failed to emit connected event to socket', socket.id + ':', emitError.message);
+            }
+        });
+        
+        // Message received handling
+        handler.on('message_received', function(messageData) {
+            console.log('📨 Message received for socket', socket.id + ':', {
+                messageId: messageData.messageId,
+                from: messageData.from,
+                preview: messageData.text ? messageData.text.substring(0, 50) + '...' : '[No text]'
+            });
+            
+            try {
+                socket.emit('message_received', {
+                    ...messageData,
+                    timestamp: new Date().toISOString()
+                });
+                
+                // Update last activity
+                const connection = activeConnections.get(socket.id);
+                if (connection) {
+                    connection.lastActivity = new Date().toISOString();
+                }
+                
+            } catch (emitError) {
+                console.error('❌ Failed to emit message to socket', socket.id + ':', emitError.message);
+            }
+        });
+        
+        // Error handling with categorization
+        handler.on('error', function(error) {
+            console.error('❌ WhatsApp handler error for socket', socket.id + ':', error);
+            
+            try {
+                socket.emit('error', {
+                    type: 'handler_error',
+                    message: typeof error === 'string' ? error : error.message || 'Unknown error',
+                    timestamp: new Date().toISOString()
+                });
+            } catch (emitError) {
+                console.error('❌ Failed to emit error to socket', socket.id + ':', emitError.message);
+            }
+        });
+    }
+
+    // Enhanced cleanup function
+    async function cleanupSocketHandler(socketId) {
+        try {
+            console.log('🧹 Cleaning up handler for socket:', socketId);
+            
+            // Clear cleanup timeout if exists
+            const cleanupTimeout = connectionCleanupTimeouts.get(socketId);
+            if (cleanupTimeout) {
+                clearTimeout(cleanupTimeout);
+                connectionCleanupTimeouts.delete(socketId);
+            }
+            
+            // Cleanup WhatsApp handler
+            const handler = whatsappHandlers.get(socketId);
+            if (handler) {
+                console.log('🔌 Disconnecting WhatsApp handler for socket:', socketId);
+                await handler.cleanup();
+                whatsappHandlers.delete(socketId);
+            }
+            
+            // Remove connection info
+            activeConnections.delete(socketId);
+            
+            console.log('✅ Cleanup completed for socket:', socketId);
+            console.log('📊 Active handlers:', whatsappHandlers.size, 'Active connections:', activeConnections.size);
+            
+        } catch (error) {
+            console.error('❌ Error during cleanup for socket', socketId + ':', error.message);
+        }
+    }
+
+    // Periodic cleanup of stale connections
+    setInterval(() => {
+        const now = Date.now();
+        const staleThreshold = 10 * 60 * 1000; // 10 minutes
+        
+        activeConnections.forEach((connection, socketId) => {
+            const lastActivity = new Date(connection.lastActivity).getTime();
+            if (now - lastActivity > staleThreshold) {
+                console.log('🗑️ Cleaning up stale connection:', socketId);
+                cleanupSocketHandler(socketId).catch(err => {
+                    console.error('❌ Error cleaning stale connection:', err.message);
+                });
+            }
+        });
+    }, 5 * 60 * 1000); // Check every 5 minutes
+
+    // Connection monitoring endpoint
+    app.get('/admin/connections', function(req, res) {
+        const connections = [];
+        activeConnections.forEach((connection, socketId) => {
+            const handler = whatsappHandlers.get(socketId);
+            connections.push({
+                socketId,
+                ...connection,
+                handlerStatus: handler ? handler.getConnectionStatus() : null
+            });
+        });
+        
+        res.json({
+            timestamp: new Date().toISOString(),
+            totalConnections: activeConnections.size,
+            totalHandlers: whatsappHandlers.size,
+            socketIoConnections: io.engine.clientsCount,
+            connections
         });
     });
 
@@ -323,9 +640,16 @@ try {
     });
 
     app.get('/app', function(req, res) {
-        const isEmbedded = req.headers['x-bitrix24-domain'] || req.query.domain;
-        if (isEmbedded) {
-            res.send(getBitrix24EmbeddedHTML());
+        console.log('🎯 App route accessed');
+        console.log('📋 Query params:', req.query);
+        console.log('📋 Headers:', req.headers);
+        
+        const domain = req.query.domain || req.query.DOMAIN;
+        const accessToken = req.query.access_token || req.query.AUTH_ID;
+        const isEmbedded = req.headers['x-bitrix24-domain'] || domain;
+        
+        if (isEmbedded && domain && accessToken) {
+            res.send(getBitrix24EmbeddedHTML(domain, accessToken));
         } else {
             res.send(getWhatsAppConnectorHTML());
         }
@@ -344,95 +668,15 @@ try {
     });
 
     app.get('/install.js', (req, res) => {
-    console.log('📦 Install.js route accessed');
-    console.log('📋 Query params:', req.query);
-    console.log('📋 Headers:', req.headers);
-    console.log('📋 Referer:', req.headers.referer);
-    
-    let domain = req.query.DOMAIN || req.query.domain;
-    
-    if (!domain && req.headers.referer) {
-        try {
-            const refererUrl = new URL(req.headers.referer);
-            domain = refererUrl.hostname;
-            console.log('🔍 Extracted domain from referer:', domain);
-        } catch (e) {
-            console.log('❌ Could not parse referer URL');
-        }
-    }
-    
-    if (!domain) {
-        return res.send(getBitrix24DomainFormHTML());
-    }
-    
-    console.log('🔐 Creating OAuth URL for domain:', domain);
-    console.log('🔐 Using APP_ID:', process.env.APP_ID);
-    console.log('🔐 Using scopes:', APP_SCOPE);
-    
-    const authUrl = `https://${domain}/oauth/authorize/?` + querystring.stringify({
-        client_id: process.env.APP_ID,
-        response_type: 'code',
-        scope: APP_SCOPE,
-        redirect_uri: `${process.env.BASE_URL}/oauth/callback`,
-        state: encodeURIComponent(JSON.stringify({ domain })) // Pass domain in state
-    });
-    
-    console.log('🌐 OAuth URL:', authUrl);
-    
-    res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Installing WhatsApp Connector</title>
-            <style>body { font-family: Arial; text-align: center; padding: 50px; } .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #25D366; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 20px auto; } @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }</style>
-        </head>
-        <body>
-            <h2>📱 Installing WhatsApp Connector</h2>
-            <div class="spinner"></div>
-            <p>Domain: <strong>${domain}</strong></p>
-            <p>Redirecting to Bitrix24 authorization...</p>
-            <script>window.location.href = '${authUrl}';</script>
-        </body>
-        </html>
-    `);
-});
-    app.get('/test-oauth/:domain', function(req, res) {
-    const domain = req.params.domain;
-    const authUrl = `https://${domain}/oauth/authorize/?${querystring.stringify({
-        client_id: process.env.APP_ID,
-        response_type: 'code',
-        scope: APP_SCOPE,
-        redirect_uri: `${process.env.BASE_URL}/oauth/callback`,
-        state: encodeURIComponent(JSON.stringify({ domain: domain }))
-    })}`;
-    
-    res.json({
-        domain: domain,
-        authUrl: authUrl,
-        config: {
-            APP_ID: process.env.APP_ID,
-            BASE_URL: process.env.BASE_URL,
-            REDIRECT_URI: `${process.env.BASE_URL}/oauth/callback`
-        }
-    });
-});
-// #1: Fix the POST /install.js route
-app.post('/install.js', async (req, res) => {
-    console.log('📦 POST Install.js route accessed');
-    console.log('📋 Body:', req.body);
-    console.log('📋 Headers:', req.headers);
-    
-    const authId = req.body.AUTH_ID;
-    const memberId = req.body.member_id;
-    const placement = req.body.PLACEMENT;
-    
-    if (authId && memberId) {
-        console.log('✅ Bitrix24 installation request detected');
-        console.log('🔑 AUTH_ID:', authId);
-        console.log('👤 Member ID:', memberId);
+        console.log('📦 GET /install.js route accessed');
+        console.log('📋 Query params:', req.query);
+        console.log('📋 Headers:', req.headers);
+        console.log('📋 Referer:', req.headers.referer);
         
-        let domain = null;
-        if (req.headers.referer) {
+        let domain = req.query.DOMAIN || req.query.domain;
+        
+        // Try to extract domain from referer if not provided
+        if (!domain && req.headers.referer) {
             try {
                 const refererUrl = new URL(req.headers.referer);
                 domain = refererUrl.hostname;
@@ -442,206 +686,350 @@ app.post('/install.js', async (req, res) => {
             }
         }
         
-        if (domain && domain.includes('bitrix24')) {
-            console.log('🚀 Redirecting to OAuth for domain:', domain);
-            const authUrl = `https://${domain}/oauth/authorize/?` + querystring.stringify({
-                client_id: process.env.APP_ID,
-                response_type: 'code',
-                scope: APP_SCOPE,
-                redirect_uri: `${process.env.BASE_URL}/oauth/callback`,
-                state: encodeURIComponent(JSON.stringify({ domain }))
-            });
-            return res.redirect(authUrl);
-        } else {
-            console.log('⚠️ Bitrix24 installation detected but no domain found');
-            return res.send(getBitrix24InstallationFormHTML(authId, memberId));
+        if (!domain) {
+            console.log('❌ No domain found, showing domain form');
+            return res.send(getBitrix24DomainFormHTML());
         }
-    }
-    
-    const domain = req.body.domain || req.body.DOMAIN;
-    if (domain) {
+        
+        if (!domain.includes('bitrix24')) {
+            console.log('❌ Invalid domain format:', domain);
+            return res.send(getDomainErrorHTML('Domain must be a valid Bitrix24 domain'));
+        }
+        
+        console.log('🔐 Creating OAuth URL for domain:', domain);
+        
         const authUrl = `https://${domain}/oauth/authorize/?` + querystring.stringify({
+            client_id: APP_ID,
+            response_type: 'code',
+            scope: APP_SCOPE,
+            redirect_uri: `${BASE_URL}/oauth/callback`,
+            state: encodeURIComponent(JSON.stringify({ domain }))
+        });
+        
+        console.log('🌐 OAuth URL generated:', authUrl);
+        
+        res.send(getInstallationRedirectHTML(domain, authUrl));
+    });
+    
+    app.get('/test-oauth/:domain', function(req, res) {
+        const domain = req.params.domain;
+        const authUrl = `https://${domain}/oauth/authorize/?${querystring.stringify({
             client_id: process.env.APP_ID,
             response_type: 'code',
             scope: APP_SCOPE,
             redirect_uri: `${process.env.BASE_URL}/oauth/callback`,
-            state: encodeURIComponent(JSON.stringify({ domain }))
+            state: encodeURIComponent(JSON.stringify({ domain: domain }))
+        })}`;
+        
+        res.json({
+            domain: domain,
+            authUrl: authUrl,
+            config: {
+                APP_ID: process.env.APP_ID,
+                BASE_URL: process.env.BASE_URL,
+                REDIRECT_URI: `${process.env.BASE_URL}/oauth/callback`
+            }
         });
-        return res.redirect(authUrl);
-    }
-    
-    console.log('❌ Insufficient data for installation');
-    return res.status(400).send(getInstallationErrorHTML());
-});    
-    function getBitrix24InstallationFormHTML(authId, memberId) {
-        return `
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>WhatsApp Connector - Complete Installation</title>
-                <style>
-                    body {
-                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                        margin: 0;
-                        padding: 20px;
-                        min-height: 100vh;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                    }
-                    .container {
-                        background: white;
-                        padding: 40px;
-                        border-radius: 20px;
-                        box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-                        max-width: 500px;
-                        width: 100%;
-                    }
-                    .header {
-                        text-align: center;
-                        margin-bottom: 30px;
-                    }
-                    .header h2 {
-                        color: #25D366;
-                        margin-bottom: 10px;
-                        font-size: 1.8rem;
-                    }
-                    .form-group {
-                        margin-bottom: 20px;
-                    }
-                    .form-group label {
-                        display: block;
-                        margin-bottom: 8px;
-                        font-weight: 600;
-                        color: #333;
-                    }
-                    .form-group input {
-                        width: 100%;
-                        padding: 15px;
-                        border: 2px solid #ddd;
-                        border-radius: 10px;
-                        font-size: 16px;
-                        transition: border-color 0.3s;
-                    }
-                    .form-group input:focus {
-                        outline: none;
-                        border-color: #25D366;
-                    }
-                    .btn {
-                        width: 100%;
-                        padding: 15px;
-                        background: #25D366;
-                        color: white;
-                        border: none;
-                        border-radius: 10px;
-                        font-size: 16px;
-                        font-weight: 600;
-                        cursor: pointer;
-                        transition: background 0.3s;
-                    }
-                    .btn:hover {
-                        background: #128C7E;
-                    }
-                    .info {
-                        background: #f8f9fa;
-                        padding: 20px;
-                        border-radius: 10px;
-                        margin-top: 20px;
-                    }
-                    .info h4 {
-                        color: #25D366;
-                        margin-top: 0;
-                    }
-                    .success-indicator {
-                        background: #d4edda;
-                        color: #155724;
-                        padding: 15px;
-                        border-radius: 10px;
-                        margin-bottom: 20px;
-                        border-left: 4px solid #25D366;
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <h2>📱 WhatsApp Connector</h2>
-                        <p>Almost there! We need your Bitrix24 domain to complete the installation.</p>
-                    </div>
-                    <div class="success-indicator">
-                        ✅ Installation request received from Bitrix24<br>
-                        🔑 Authentication data verified
-                    </div>
-                    <form method="POST" action="/install.js">
-                        <input type="hidden" name="auth_id" value="${authId}">
-                        <input type="hidden" name="member_id" value="${memberId}">
-                        <div class="form-group">
-                            <label for="domain">Your Bitrix24 Domain:</label>
-                            <input type="text" 
-                                id="domain" 
-                                name="domain" 
-                                placeholder="yourcompany.bitrix24.com" 
-                                required 
-                                pattern="[a-zA-Z0-9.-]+\\.bitrix24\\.(com|net|ru|de|fr|es|it|pl|ua|kz|by)"
-                            >
-                        </div>
-                        <button type="submit" class="btn">Complete Installation</button>
-                    </form>
-                    <div class="info">
-                        <h4>💡 How to find your domain:</h4>
-                        <ul>
-                            <li>Look at your Bitrix24 URL in the browser address bar</li>
-                            <li>If it shows <code>https://mycompany.bitrix24.com</code></li>
-                            <li>Then enter: <code>mycompany.bitrix24.com</code></li>
-                            <li>Don't include <code>https://</code> or any paths</li>
-                        </ul>
-                    </div>
-                </div>
-                <script>
-                    if (window.parent && window.parent.location) {
-                        try {
-                            const parentUrl = window.parent.location.href;
-                            const match = parentUrl.match(/https?:\\/\\/([^\\/]+\\.bitrix24\\.[^\\/]+)/);
-                            if (match) {
-                                document.getElementById("domain").value = match[1];
-                                console.log("Auto-detected domain: " + match[1]);
-                            }
-                        } catch (e) {
-                            console.log("Could not auto-detect domain from parent window");
-                        }
-                    }
-                    if (document.referrer) {
-                        try {
-                            const referrerUrl = new URL(document.referrer);
-                            if (referrerUrl.hostname.includes("bitrix24")) {
-                                document.getElementById("domain").value = referrerUrl.hostname;
-                                console.log("Auto-detected domain from referrer: " + referrerUrl.hostname);
-                            }
-                        } catch (e) {
-                            console.log("Could not parse referrer");
-                        }
-                    }
-                </script>
-            </body>
-            </html>
-        `;
-    }
+    });
 
-    app.get('/app', function(req, res) {
-        console.log('🎯 App route accessed');
-        console.log('📋 Query params: ' + JSON.stringify(req.query));
-        console.log('📋 Headers: ' + JSON.stringify(req.headers));
+    app.post('/install.js', async (req, res) => {
+        console.log('📦 POST /install.js route accessed at', new Date().toISOString());
+        console.log('📋 Request body:', JSON.stringify(req.body, null, 2));
+        console.log('📋 Request headers:', JSON.stringify({
+            'user-agent': req.headers['user-agent'],
+            'referer': req.headers.referer,
+            'origin': req.headers.origin,
+            'host': req.headers.host
+        }, null, 2));
         
-        const domain = req.query.domain || req.query.DOMAIN;
-        const accessToken = req.query.access_token || req.query.AUTH_ID;
-        const isEmbedded = req.headers['x-bitrix24-domain'] || domain;
+        const authId = req.body.AUTH_ID;
+        const authExpires = req.body.AUTH_EXPIRES;
+        const refreshId = req.body.REFRESH_ID;
+        const memberId = req.body.member_id;
+        const status = req.body.status;
+        const placement = req.body.PLACEMENT;
+        const placementOptions = req.body.PLACEMENT_OPTIONS;
         
-        if (isEmbedded) {
-            res.send(getBitrix24EmbeddedHTML());
-        } else {
-            res.send(getWhatsAppConnectorHTML());
+        // Check if this is a Bitrix24 installation request
+        if (authId && memberId && status) {
+            console.log('✅ Bitrix24 installation request detected');
+            console.log('🔑 AUTH_ID:', authId.substring(0, 20) + '...');
+            console.log('👤 Member ID:', memberId);
+            console.log('📊 Status:', status);
+            console.log('🎯 Placement:', placement);
+            
+            // Extract domain from referer
+            let domain = null;
+            if (req.headers.referer) {
+                try {
+                    const refererUrl = new URL(req.headers.referer);
+                    domain = refererUrl.hostname;
+                    console.log('🔍 Extracted domain from referer:', domain);
+                } catch (e) {
+                    console.error('❌ Could not parse referer URL:', req.headers.referer);
+                }
+            }
+            
+            // Validate domain
+            if (domain && domain.includes('bitrix24')) {
+                console.log('🚀 Redirecting to OAuth for domain:', domain);
+                
+                const state = JSON.stringify({ 
+                    domain, 
+                    authId, 
+                    memberId,
+                    placement: placement || 'DEFAULT'
+                });
+                
+                const authUrl = `https://${domain}/oauth/authorize/?` + querystring.stringify({
+                    client_id: APP_ID,
+                    response_type: 'code',
+                    scope: APP_SCOPE,
+                    redirect_uri: `${BASE_URL}/oauth/callback`,
+                    state: encodeURIComponent(state)
+                });
+                
+                console.log('🌐 OAuth URL generated:', authUrl);
+                
+                // For iframe/embedded requests, return JavaScript redirect
+                if (req.headers['sec-fetch-dest'] === 'iframe' || 
+                    req.headers.referer?.includes('bitrix24')) {
+                    return res.send(`
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <title>Redirecting to Authorization</title>
+                            <style>
+                                body { 
+                                    font-family: Arial, sans-serif; 
+                                    text-align: center; 
+                                    padding: 50px;
+                                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                    color: white;
+                                    margin: 0;
+                                }
+                                .container {
+                                    background: rgba(255,255,255,0.1);
+                                    padding: 30px;
+                                    border-radius: 15px;
+                                    backdrop-filter: blur(10px);
+                                    max-width: 500px;
+                                    margin: 0 auto;
+                                }
+                                .spinner { 
+                                    border: 4px solid rgba(255,255,255,0.3); 
+                                    border-top: 4px solid white; 
+                                    border-radius: 50%; 
+                                    width: 40px; 
+                                    height: 40px; 
+                                    animation: spin 1s linear infinite; 
+                                    margin: 20px auto; 
+                                } 
+                                @keyframes spin { 
+                                    0% { transform: rotate(0deg); } 
+                                    100% { transform: rotate(360deg); } 
+                                }
+                                h2 { margin-bottom: 20px; }
+                                .info { margin: 15px 0; opacity: 0.9; }
+                            </style>
+                        </head>
+                        <body>
+                            <div class="container">
+                                <h2>📱 Installing WhatsApp Connector</h2>
+                                <div class="spinner"></div>
+                                <p class="info"><strong>Domain:</strong> ${domain}</p>
+                                <p class="info"><strong>Status:</strong> Redirecting to authorization...</p>
+                                <p class="info">If not redirected automatically, <a href="${authUrl}" style="color: #FFD700;">click here</a></p>
+                            </div>
+                            <script>
+                                console.log('🚀 Redirecting to OAuth authorization...');
+                                setTimeout(() => {
+                                    if (window.top !== window.self) {
+                                        // We're in an iframe, redirect parent
+                                        window.top.location.href = '${authUrl}';
+                                    } else {
+                                        // Normal redirect
+                                        window.location.href = '${authUrl}';
+                                    }
+                                }, 1500);
+                            </script>
+                        </body>
+                        </html>
+                    `);
+                } else {
+                    // Direct redirect for non-iframe requests
+                    return res.redirect(authUrl);
+                }
+                
+            } else {
+                console.log('⚠️ Bitrix24 installation detected but no valid domain found');
+                console.log('📋 Referer header:', req.headers.referer);
+                return res.send(getBitrix24InstallationFormHTML(authId, memberId));
+            }
         }
+        
+        // Handle manual domain submission
+        const manualDomain = req.body.domain || req.body.DOMAIN;
+        if (manualDomain) {
+            console.log('🔄 Processing manual domain submission:', manualDomain);
+            
+            // Validate domain format
+            if (!manualDomain.includes('bitrix24')) {
+                return res.status(400).send(getDomainErrorHTML('Invalid domain format. Must be a Bitrix24 domain.'));
+            }
+            
+            const authUrl = `https://${manualDomain}/oauth/authorize/?` + querystring.stringify({
+                client_id: APP_ID,
+                response_type: 'code',
+                scope: APP_SCOPE,
+                redirect_uri: `${BASE_URL}/oauth/callback`,
+                state: encodeURIComponent(JSON.stringify({ domain: manualDomain }))
+            });
+            
+            return res.redirect(authUrl);
+        }
+        
+        console.log('❌ Insufficient data for installation');
+        return res.status(400).send(getInstallationErrorHTML());
+    });
+
+    app.get('/debug-install', function(req, res) {
+        res.json({
+            timestamp: new Date().toISOString(),
+            environment: {
+                APP_ID: process.env.APP_ID,
+                BASE_URL: process.env.BASE_URL,
+                NODE_ENV: process.env.NODE_ENV
+            },
+            request: {
+                method: req.method,
+                url: req.url,
+                query: req.query,
+                headers: {
+                    'user-agent': req.headers['user-agent'],
+                    'referer': req.headers.referer,
+                    'x-bitrix24-domain': req.headers['x-bitrix24-domain'],
+                    'host': req.headers.host
+                }
+            }
+        });
+    });
+
+    app.get('/oauth/callback', async (req, res) => {
+        console.log('🔐 OAuth callback received at', new Date().toISOString());
+        console.log('📋 Query params:', req.query);
+        console.log('📋 Headers:', req.headers);
+        
+        const code = req.query.code;
+        const error = req.query.error;
+        const errorDescription = req.query.error_description;
+        
+        // Handle OAuth errors
+        if (error) {
+            console.error('❌ OAuth error:', error, errorDescription);
+            return res.status(400).send(getOAuthErrorHTML(error, errorDescription));
+        }
+        
+        if (!code) {
+            console.error('❌ No authorization code received');
+            return res.status(400).send(getOAuthErrorHTML('missing_code', 'Authorization code missing'));
+        }
+
+        // Extract domain from state or use fallback methods
+        let domain = null;
+        try {
+            if (req.query.state) {
+                const state = JSON.parse(decodeURIComponent(req.query.state));
+                domain = state.domain;
+            }
+        } catch (e) {
+            console.log('⚠️ Could not parse state parameter');
+        }
+        
+        // Fallback domain detection
+        if (!domain) {
+            domain = req.query.domain || 'testhamidjuly25.bitrix24.in';
+            console.log('🔍 Using fallback domain:', domain);
+        }
+
+        try {
+            console.log('🔄 Exchanging authorization code for access token...');
+            const tokenUrl = `https://${domain}/oauth/token/`;
+            const tokenParams = {
+                client_id: APP_ID,
+                client_secret: APP_SECRET,
+                grant_type: 'authorization_code',
+                code: code,
+                redirect_uri: `${BASE_URL}/oauth/callback`
+            };
+            
+            console.log('📤 Token request URL:', tokenUrl);
+            console.log('📤 Token params (without secrets):', {
+                client_id: tokenParams.client_id,
+                grant_type: tokenParams.grant_type,
+                redirect_uri: tokenParams.redirect_uri
+            });
+            
+            const tokenResponse = await axios.post(tokenUrl, querystring.stringify(tokenParams), {
+                headers: { 
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'User-Agent': 'WhatsApp-Bitrix24-Connector/1.0'
+                },
+                timeout: 15000
+            });
+            
+            console.log('✅ Token exchange successful');
+            console.log('📊 Token response keys:', Object.keys(tokenResponse.data));
+            
+            const accessToken = tokenResponse.data.access_token;
+            const refreshToken = tokenResponse.data.refresh_token;
+            
+            if (!accessToken) {
+                throw new Error('No access token received from Bitrix24');
+            }
+            
+            console.log('🎯 Redirecting to app with credentials...');
+            
+            // Test the connection before redirecting
+            try {
+                const testUrl = `https://${domain}/rest/profile`;
+                const testResponse = await axios.post(testUrl, { access_token: accessToken });
+                console.log('✅ Access token validation successful');
+            } catch (testError) {
+                console.warn('⚠️ Access token test failed:', testError.message);
+                // Continue anyway as some tokens might work despite test failure
+            }
+            
+            // Redirect to app with credentials
+            const appUrl = `/app?domain=${encodeURIComponent(domain)}&access_token=${encodeURIComponent(accessToken)}`;
+            res.redirect(appUrl);
+            
+        } catch (error) {
+            console.error('❌ Token exchange failed:', error.message);
+            if (error.response) {
+                console.error('📊 Error response status:', error.response.status);
+                console.error('📊 Error response data:', error.response.data);
+            }
+            res.status(500).send(getTokenExchangeErrorHTML(error));
+        }
+    });
+
+    app.get('/debug/config', function(req, res) {
+        res.json({
+            timestamp: new Date().toISOString(),
+            config: {
+                APP_ID: process.env.APP_ID || 'NOT_SET',
+                APP_SECRET: process.env.APP_SECRET ? 'SET' : 'NOT_SET',
+                BASE_URL: process.env.BASE_URL || 'NOT_SET',
+                PORT: process.env.PORT || '3000',
+                NODE_ENV: process.env.NODE_ENV || 'NOT_SET'
+            },
+            urls: {
+                oauth_callback: `${process.env.BASE_URL}/oauth/callback`,
+                app_url: `${process.env.BASE_URL}/app`,
+                health_check: `${process.env.BASE_URL}/health`
+            }
+        });
     });
 
     function getBitrix24DomainFormHTML() {
@@ -654,7 +1042,7 @@ app.post('/install.js', async (req, res) => {
                     body { font-family: Arial, sans-serif; max-width: 500px; margin: 100px auto; padding: 20px; }
                     .form { background: #f8f9fa; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
                     input { width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #ddd; border-radius: 5px; font-size: 16px; }
-                    button { background: #25D366; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px Pfizer, Inc..; width: 100%; }
+                    button { background: #25D366; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; }
                     button:hover { background: #128C7E; }
                     .help { background: #e3f2fd; padding: 15px; border-radius: 5px; margin: 15px 0; }
                 </style>
@@ -690,123 +1078,6 @@ app.post('/install.js', async (req, res) => {
         `;
     }
 
-    app.get('/debug-install', function(req, res) {
-        res.json({
-            timestamp: new Date().toISOString(),
-            environment: {
-                APP_ID: process.env.APP_ID,
-                BASE_URL: process.env.BASE_URL,
-                NODE_ENV: process.env.NODE_ENV
-            },
-            request: {
-                method: req.method,
-                url: req.url,
-                query: req.query,
-                headers: {
-                    'user-agent': req.headers['user-agent'],
-                    'referer': req.headers.referer,
-                    'x-bitrix24-domain': req.headers['x-bitrix24-domain'],
-                    'host': req.headers.host
-                }
-            }
-        });
-    });
-
-    app.get('/oauth/callback', async (req, res) => {
-    console.log('🔐 OAuth callback received at', new Date().toISOString());
-    console.log('📋 Query params:', req.query);
-    const code = req.query.code;
-    const domain = req.query.state ? JSON.parse(decodeURIComponent(req.query.state)).domain : req.query.domain || 'testhamidjuly25.bitrix24.in';
-    
-    if (!code) {
-        console.error('❌ No authorization code received');
-        return res.status(400).send('Authorization code missing');
-    }
-
-    try {
-        const tokenUrl = `https://${domain}/oauth/token/`;
-        const tokenParams = querystring.stringify({
-            client_id: process.env.APP_ID,
-            client_secret: process.env.APP_SECRET,
-            grant_type: 'authorization_code',
-            code: code,
-            redirect_uri: `${process.env.BASE_URL}/oauth/callback`
-        });
-        
-        console.log('📤 Sending token request to:', tokenUrl);
-        const tokenResponse = await axios.post(tokenUrl, tokenParams, {
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            timeout: 10000 // Added timeout to prevent hanging
-        });
-        console.log('✅ Token response:', tokenResponse.data);
-        
-        const accessToken = tokenResponse.data.access_token;
-        res.redirect(`/app?domain=${encodeURIComponent(domain)}&access_token=${encodeURIComponent(accessToken)}`);
-    } catch (error) {
-        console.error('❌ Token exchange failed:', error.message, error.response?.data);
-        res.status(500).send('Failed to exchange token. Check server logs.');
-    }
-});
-app.get('/app', (req, res) => {
-    console.log('🎯 App route accessed');
-    console.log('📋 Query params:', req.query);
-    const domain = req.query.domain || req.query.DOMAIN;
-    const accessToken = req.query.access_token || req.query.AUTH_ID;
-    const isEmbedded = req.headers['x-bitrix24-domain'] || domain;
-    
-    if (isEmbedded && domain && accessToken) {
-        res.send(getBitrix24EmbeddedHTML(domain, accessToken));
-    } else {
-        res.send(getWhatsAppConnectorHTML());
-    }
-});
-
-function getBitrix24EmbeddedHTML(domain, accessToken) {
-    return `
-        <!DOCTYPE html>
-        <html>
-        <body>
-            <div id="qrCode"></div>
-            <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-            <script>
-                const domain = "${domain}";
-                const accessToken = "${accessToken}";
-                const socket = io('https://${process.env.BASE_URL.replace('https://', '')}', { 
-                    transports: ['websocket'], 
-                    reconnectionAttempts: 5 
-                });
-                socket.on('connect', () => {
-                    console.log('Socket connected, emitting initialize_whatsapp');
-                    socket.emit('initialize_whatsapp', { domain, accessToken });
-                });
-                socket.on('qr_code', (qr) => {
-                    console.log('QR received:', qr);
-                    document.getElementById('qrCode').innerText = qr; // Temporary display
-                    // Add QR code rendering logic here (e.g., using a QR library)
-                });
-                socket.on('error', (error) => console.error('Socket error:', error));
-            </script>
-        </body>
-        </html>
-    `;
-}
-app.get('/debug/config', function(req, res) {
-    res.json({
-        timestamp: new Date().toISOString(),
-        config: {
-            APP_ID: process.env.APP_ID || 'NOT_SET',
-            APP_SECRET: process.env.APP_SECRET ? 'SET' : 'NOT_SET',
-            BASE_URL: process.env.BASE_URL || 'NOT_SET',
-            PORT: process.env.PORT || '3000',
-            NODE_ENV: process.env.NODE_ENV || 'NOT_SET'
-        },
-        urls: {
-            oauth_callback: `${process.env.BASE_URL}/oauth/callback`,
-            app_url: `${process.env.BASE_URL}/app`,
-            health_check: `${process.env.BASE_URL}/health`
-        }
-    });
-});
     function getAppWidgetHTML() {
         return (
             '<!DOCTYPE html>' +
@@ -877,7 +1148,7 @@ app.get('/debug/config', function(req, res) {
         `;
     }
 
-    function getBitrix24EmbeddedHTML() {
+    function getBitrix24EmbeddedHTML(domain, accessToken) {
         return `
             <!DOCTYPE html>
             <html lang="en">
@@ -1169,13 +1440,16 @@ app.get('/debug/config', function(req, res) {
                             document.getElementById("connectionStatus").className = "status error";
                             document.getElementById("connectionStatus").textContent = "Socket.IO connection failed: " + error.message;
                         });
-                        socket.on("qr_code", function(qr) {
+                        socket.on("connection_confirmed", function(data) {
+                            log(\`Socket connected: \${data.socketId}\`);
+                        });
+                        socket.on("qr_code", function(data) {
                             if (!qrGenerated) {
                                 log("Generating QR code");
                                 try {
                                     const qrCode = new QRious({
                                         element: document.getElementById("qrCode"),
-                                        value: qr,
+                                        value: data.qr,
                                         size: 200,
                                         level: 'H' // High error correction
                                     });
@@ -1190,11 +1464,11 @@ app.get('/debug/config', function(req, res) {
                             }
                         });
                         socket.on("status_update", function(status) {
-                            log("Status update: " + status);
-                            document.getElementById("qrStatus").textContent = status;
-                            document.getElementById("connectionStatus").textContent = status;
+                            log("Status update: " + status.message);
+                            document.getElementById("qrStatus").textContent = status.message;
+                            document.getElementById("connectionStatus").textContent = status.message;
                         });
-                        socket.on("whatsapp_connected", function() {
+                        socket.on("whatsapp_connected", function(data) {
                             log("WhatsApp connected");
                             document.getElementById("step2").classList.remove("active");
                             document.getElementById("step3").classList.add("active");
@@ -1204,18 +1478,18 @@ app.get('/debug/config', function(req, res) {
                             document.getElementById("connectionStatus").textContent = "Connected to WhatsApp";
                             document.getElementById("connectionInfo").classList.remove("hidden");
                             document.getElementById("statusText").textContent = "Connected";
-                            document.getElementById("connectedSince").textContent = new Date().toLocaleString();
+                            document.getElementById("connectedSince").textContent = new Date(data.timestamp).toLocaleString();
                             document.getElementById("disconnectBtn").classList.remove("hidden");
                             isConnected = true;
                         });
                         socket.on("message_received", function(messageData) {
                             log("Message received: " + messageData.messageId);
-                            document.getElementById("lastMessage").textContent = new Date().toLocaleString();
+                            document.getElementById("lastMessage").textContent = new Date(messageData.timestamp).toLocaleString();
                         });
                         socket.on("error", function(error) {
-                            log("Error: " + error);
+                            log("Error [" + error.type + "]: " + error.message);
                             document.getElementById("connectionStatus").className = "status error";
-                            document.getElementById("connectionStatus").textContent = "Error: " + error;
+                            document.getElementById("connectionStatus").textContent = "Error: " + error.message;
                             document.getElementById("qrContainer").classList.add("hidden");
                             document.getElementById("qrStatus").classList.add("hidden");
                         });
@@ -1290,6 +1564,398 @@ app.get('/debug/config', function(req, res) {
         `;
     }
 
+    function getOAuthErrorHTML(error, description) {
+        return `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>OAuth Error - WhatsApp Connector</title>
+                <style>
+                    body { 
+                        font-family: Arial, sans-serif; 
+                        max-width: 600px; 
+                        margin: 50px auto; 
+                        padding: 20px;
+                        background: #f8f9fa;
+                    }
+                    .error-container {
+                        background: #f8d7da;
+                        border: 1px solid #f5c6cb;
+                        color: #721c24;
+                        padding: 20px;
+                        border-radius: 10px;
+                        margin: 20px 0;
+                    }
+                    .btn {
+                        display: inline-block;
+                        padding: 12px 24px;
+                        background: #25D366;
+                        color: white;
+                        text-decoration: none;
+                        border-radius: 6px;
+                        font-weight: 600;
+                        margin: 10px 5px;
+                    }
+                    .btn:hover { background: #128C7E; }
+                    .details { background: #f8f9fa; padding: 15px; border-radius: 6px; margin: 15px 0; }
+                </style>
+            </head>
+            <body>
+                <h2>❌ Authorization Error</h2>
+                <div class="error-container">
+                    <h3>OAuth Error: ${error}</h3>
+                    <p>${description || 'An error occurred during authorization'}</p>
+                </div>
+                <div class="details">
+                    <h4>What happened?</h4>
+                    <p>There was an error during the Bitrix24 authorization process. This could be due to:</p>
+                    <ul>
+                        <li>User cancelled the authorization</li>
+                        <li>Invalid app configuration</li>
+                        <li>Network connectivity issues</li>
+                        <li>Bitrix24 server issues</li>
+                    </ul>
+                </div>
+                <a href="/" class="btn">🔄 Try Again</a>
+                <a href="/debug/config" class="btn">🔧 Debug Info</a>
+            </body>
+            </html>
+        `;
+    }
+
+    function getTokenExchangeErrorHTML(error) {
+        return `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Token Exchange Error - WhatsApp Connector</title>
+                <style>
+                    body { 
+                        font-family: Arial, sans-serif; 
+                        max-width: 600px; 
+                        margin: 50px auto; 
+                        padding: 20px;
+                        background: #f8f9fa;
+                    }
+                    .error-container {
+                        background: #f8d7da;
+                        border: 1px solid #f5c6cb;
+                        color: #721c24;
+                        padding: 20px;
+                        border-radius: 10px;
+                        margin: 20px 0;
+                    }
+                    .btn {
+                        display: inline-block;
+                        padding: 12px 24px;
+                        background: #25D366;
+                        color: white;
+                        text-decoration: none;
+                        border-radius: 6px;
+                        font-weight: 600;
+                        margin: 10px 5px;
+                    }
+                    .btn:hover { background: #128C7E; }
+                    .technical-details { 
+                        background: #f8f9fa; 
+                        padding: 15px; 
+                        border-radius: 6px; 
+                        margin: 15px 0;
+                        font-family: monospace;
+                        font-size: 12px;
+                        color: #666;
+                    }
+                </style>
+            </head>
+            <body>
+                <h2>❌ Token Exchange Failed</h2>
+                <div class="error-container">
+                    <h3>Failed to exchange authorization code for access token</h3>
+                    <p>The OAuth token exchange process failed. This usually indicates a configuration issue.</p>
+                </div>
+                <div class="technical-details">
+                    <strong>Error Details:</strong><br>
+                    ${error.message}<br>
+                    ${error.response ? `Status: ${error.response.status}` : ''}
+                </div>
+                <p><strong>Possible solutions:</strong></p>
+                <ul>
+                    <li>Check that your APP_ID and APP_SECRET are correctly configured</li>
+                    <li>Verify that the redirect URI matches exactly</li>
+                    <li>Ensure the Bitrix24 domain is accessible</li>
+                    <li>Try the installation process again</li>
+                </ul>
+                <a href="/" class="btn">🔄 Try Again</a>
+                <a href="/debug/config" class="btn">🔧 Debug Configuration</a>
+            </body>
+            </html>
+        `;
+    }
+
+    function getDomainErrorHTML(message) {
+        return `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Domain Error - WhatsApp Connector</title>
+                <style>
+                    body { 
+                        font-family: Arial, sans-serif; 
+                        max-width: 500px; 
+                        margin: 100px auto; 
+                        padding: 20px;
+                        background: #f8f9fa;
+                    }
+                    .error-container {
+                        background: #fff3cd;
+                        border: 1px solid #ffeaa7;
+                        color: #856404;
+                        padding: 20px;
+                        border-radius: 10px;
+                        margin: 20px 0;
+                    }
+                    .form-container { 
+                        background: white; 
+                        padding: 30px; 
+                        border-radius: 10px; 
+                        box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+                    }
+                    input { 
+                        width: 100%; 
+                        padding: 12px; 
+                        margin: 10px 0; 
+                        border: 2px solid #ddd; 
+                        border-radius: 5px; 
+                        font-size: 16px; 
+                        box-sizing: border-box;
+                    }
+                    input:focus { outline: none; border-color: #25D366; }
+                    .btn { 
+                        background: #25D366; 
+                        color: white; 
+                        padding: 12px 24px; 
+                        border: none; 
+                        border-radius: 5px; 
+                        cursor: pointer; 
+                        font-size: 16px; 
+                        width: 100%; 
+                        font-weight: 600;
+                    }
+                    .btn:hover { background: #128C7E; }
+                    .help { 
+                        background: #e3f2fd; 
+                        padding: 15px; 
+                        border-radius: 5px; 
+                        margin: 15px 0; 
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="form-container">
+                    <h2>📱 WhatsApp Connector</h2>
+                    <div class="error-container">
+                        ⚠️ ${message}
+                    </div>
+                    <p>Please enter a valid Bitrix24 domain:</p>
+                    <form method="POST" action="/install.js">
+                        <input type="text" 
+                               name="domain" 
+                               placeholder="yourcompany.bitrix24.com" 
+                               pattern="[a-zA-Z0-9.-]+\\.bitrix24\\.(com|net|ru|de|fr|es|it|pl|ua|kz|by)"
+                               required>
+                        <button type="submit" class="btn">Continue Installation</button>
+                    </form>
+                    <div class="help">
+                        <strong>💡 Domain Format Examples:</strong><br>
+                        • mycompany.bitrix24.com<br>
+                        • test123.bitrix24.net<br>
+                        • company.bitrix24.ru
+                    </div>
+                </div>
+            </body>
+            </html>
+        `;
+    }
+
+    function getInstallationRedirectHTML(domain, authUrl) {
+        return `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Installing WhatsApp Connector</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body { 
+                        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        margin: 0;
+                        padding: 20px;
+                        min-height: 100vh;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    }
+                    .container {
+                        background: rgba(255,255,255,0.95);
+                        padding: 40px;
+                        border-radius: 20px;
+                        box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+                        max-width: 500px;
+                        width: 100%;
+                        text-align: center;
+                        backdrop-filter: blur(10px);
+                    }
+                    .header h2 {
+                        color: #25D366;
+                        margin-bottom: 10px;
+                        font-size: 1.8rem;
+                    }
+                    .spinner { 
+                        border: 4px solid #f3f3f3; 
+                        border-top: 4px solid #25D366; 
+                        border-radius: 50%; 
+                        width: 50px; 
+                        height: 50px; 
+                        animation: spin 1s linear infinite; 
+                        margin: 30px auto; 
+                    }
+                    @keyframes spin { 
+                        0% { transform: rotate(0deg); } 
+                        100% { transform: rotate(360deg); } 
+                    }
+                    .info {
+                        background: #f8f9fa;
+                        padding: 20px;
+                        border-radius: 10px;
+                        margin: 20px 0;
+                        border-left: 4px solid #25D366;
+                    }
+                    .progress-steps {
+                        margin: 30px 0;
+                    }
+                    .step {
+                        display: flex;
+                        align-items: center;
+                        margin: 10px 0;
+                        opacity: 0.5;
+                    }
+                    .step.active {
+                        opacity: 1;
+                        font-weight: 600;
+                        color: #25D366;
+                    }
+                    .step-number {
+                        width: 25px;
+                        height: 25px;
+                        border-radius: 50%;
+                        background: #ddd;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        margin-right: 15px;
+                        font-size: 12px;
+                        font-weight: bold;
+                    }
+                    .step.active .step-number {
+                        background: #25D366;
+                        color: white;
+                    }
+                    .manual-link {
+                        margin-top: 30px;
+                        padding: 15px;
+                        background: #e3f2fd;
+                        border-radius: 10px;
+                    }
+                    .manual-link a {
+                        color: #1976D2;
+                        text-decoration: none;
+                        font-weight: 600;
+                    }
+                    .manual-link a:hover {
+                        text-decoration: underline;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="header">
+                        <h2>📱 Installing WhatsApp Connector</h2>
+                        <div class="spinner"></div>
+                    </div>
+                    
+                    <div class="progress-steps">
+                        <div class="step active">
+                            <div class="step-number">1</div>
+                            <span>Preparing installation...</span>
+                        </div>
+                        <div class="step" id="step2">
+                            <div class="step-number">2</div>
+                            <span>Redirecting to Bitrix24...</span>
+                        </div>
+                        <div class="step" id="step3">
+                            <div class="step-number">3</div>
+                            <span>Authorization required</span>
+                        </div>
+                        <div class="step" id="step4">
+                            <div class="step-number">4</div>
+                            <span>Installation complete</span>
+                        </div>
+                    </div>
+                    
+                    <div class="info">
+                        <strong>Domain:</strong> ${domain}<br>
+                        <strong>Status:</strong> <span id="status">Preparing...</span>
+                    </div>
+                    
+                    <div class="manual-link">
+                        <strong>Not redirected automatically?</strong><br>
+                        <a href="${authUrl}" target="_blank">Click here to continue manually</a>
+                    </div>
+                </div>
+                
+                <script>
+                    let currentStep = 1;
+                    const statusElement = document.getElementById('status');
+                    
+                    function updateStep(stepNumber, status) {
+                        // Remove active from all steps
+                        document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+                        
+                        // Add active to current step
+                        if (stepNumber <= 4) {
+                            const steps = document.querySelectorAll('.step');
+                            if (steps[stepNumber - 1]) {
+                                steps[stepNumber - 1].classList.add('active');
+                            }
+                        }
+                        
+                        statusElement.textContent = status;
+                        currentStep = stepNumber;
+                    }
+                    
+                    setTimeout(() => {
+                        updateStep(2, 'Redirecting to Bitrix24...');
+                    }, 1000);
+                    
+                    setTimeout(() => {
+                        updateStep(3, 'Please authorize the application...');
+                        console.log('🚀 Redirecting to OAuth authorization:', '${authUrl}');
+                        window.location.href = '${authUrl}';
+                    }, 2500);
+                    
+                    // Fallback redirect
+                    setTimeout(() => {
+                        if (currentStep === 3) {
+                            console.log('🔄 Fallback redirect triggered');
+                            window.location.href = '${authUrl}';
+                        }
+                    }, 5000);
+                </script>
+            </body>
+            </html>
+        `;
+    }
+
     // Start the server
     server.listen(PORT, function() {
         console.log('🚀 Server running on port ' + PORT);
@@ -1311,3 +1977,24 @@ app.get('/debug/config', function(req, res) {
     console.error('🔧 Please check your environment variables and dependencies.');
     process.exit(1);
 }
+
+function getBitrix24InstallationFormHTML(authId, memberId) {
+    return `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>WhatsApp Connector - Installation</title>
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 500px; margin: 100px auto; padding: 20px; }
+                .form { background: #f8f9fa; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                input { width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #ddd; border-radius: 5px; font-size: 16px; }
+                button { background: #25D366; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; }
+                button:hover { background: #128C7E; }
+                .help { background: #e3f2fd; padding: 15px; border-radius: 5px; margin: 15px 0; }
+            </style>
+        </head>
+        <body>
+            <div class="form">
+                <h2>📱 WhatsApp Connector Installation</h2>
+                <p>Please enter your Bitrix24 domain to continue:</p>
+                <
