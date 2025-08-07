@@ -734,131 +734,83 @@ app.post('/install.js', async function(req, res) {
         });
     });
 
-    app.get('/oauth/callback', async function(req, res) {
-    console.log('🔐 OAuth callback received at: ' + new Date().toISOString());
-    console.log('📋 Query params: ' + JSON.stringify(req.query));
-    console.log('📋 Headers: ' + JSON.stringify(req.headers));
+    app.get('/oauth/callback', async (req, res) => {
+    console.log('🔐 OAuth callback received');
+    console.log('📋 Query params:', req.query);
+    const code = req.query.code;
+    const domain = req.query.domain || 'yourcompany.bitrix24.com';
     
-    try {
-        const { code, state, domain: queryDomain } = req.query;
-        if (!code) throw new Error('Missing authorization code');
-        
-        // Extract domain from state or query parameter
-        let domain = queryDomain;
-        if (state) {
-            try {
-                const stateData = JSON.parse(decodeURIComponent(state));
-                domain = stateData.domain || domain;
-            } catch (e) {
-                console.log('⚠️ Could not parse state parameter');
-            }
-        }
-        
-        // Fallback: try to extract domain from referrer
-        if (!domain && req.headers.referer) {
-            try {
-                const refererUrl = new URL(req.headers.referer);
-                domain = refererUrl.hostname;
-                console.log('🔍 Fallback: Extracted domain from referer: ' + domain);
-            } catch (e) {
-                console.log('❌ Could not parse referer URL');
-            }
-        }
-        
-        if (!domain) throw new Error('Missing domain parameter');
-        
-        console.log('🔄 Exchanging code for token...');
-        console.log('🌐 Domain: ' + domain);
-        console.log('🔑 Code: ' + code.substring(0, 20) + '...');
+    if (!code) {
+        console.error('❌ No authorization code received');
+        return res.status(400).send('Authorization code missing');
+    }
 
-        const tokenData = {
-            grant_type: 'authorization_code',
+    try {
+        const tokenUrl = `https://${domain}/oauth/token/`;
+        const tokenParams = querystring.stringify({
             client_id: process.env.APP_ID,
             client_secret: process.env.APP_SECRET,
+            grant_type: 'authorization_code',
             code: code,
-            scope: APP_SCOPE,
             redirect_uri: `${process.env.BASE_URL}/oauth/callback`
-        };
-
-        console.log('📤 Token request to: https://' + domain + '/oauth/token/');
-        console.log('📤 Token request data: ' + JSON.stringify({
-            ...tokenData,
-            client_secret: '[HIDDEN]'
-        }));
+        });
         
-        const tokenResponse = await axios.post(
-            `https://${domain}/oauth/token/`, 
-            querystring.stringify(tokenData),
-            {
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                timeout: 15000
-            }
-        );
+        const tokenResponse = await axios.post(tokenUrl, tokenParams, {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        });
+        console.log('Token response:', tokenResponse.data);
         
-        console.log('📊 Token response status: ' + tokenResponse.status);
-        console.log('📊 Token response data: ' + JSON.stringify(tokenResponse.data));
-        
-        const { access_token, refresh_token } = tokenResponse.data;
-
-        if (!access_token) throw new Error('Failed to obtain access token from Bitrix24');
-
-        console.log('✅ Access token received');
-        console.log('🚀 Running installation logic...');
-
-        const customApp = new CustomChannelApp(domain, access_token);
-        const installResult = await customApp.install();
-
-        console.log('📋 Installation result: ' + (installResult.success ? '✅ Success' : '❌ Failed'));
-
-        const redirectUrl = `/app?domain=${encodeURIComponent(domain)}&access_token=${encodeURIComponent(access_token)}&installation=${installResult.success ? 'success' : 'partial'}`;
-        console.log('🔄 Redirecting to: ' + redirectUrl);
-        res.redirect(redirectUrl);
+        const accessToken = tokenResponse.data.access_token;
+        res.redirect(`/app?domain=${domain}&access_token=${accessToken}`);
     } catch (error) {
-        console.error('❌ OAuth callback error: ' + error.message);
-        console.error('❌ Stack trace: ' + error.stack);
-        if (error.response) {
-            console.error('❌ Response data: ' + JSON.stringify(error.response.data));
-            console.error('❌ Response status: ' + error.response.status);
-            console.error('❌ Response headers: ' + JSON.stringify(error.response.headers));
-        }
-        
-        let errorHtml = `
-            <!DOCTYPE html>
-            <html>
-            <head><title>Installation Error</title></head>
-            <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px;">
-                <div style="background: #f8d7da; color: #721c24; padding: 20px; border-radius: 10px;">
-                    <h2>❌ OAuth Callback Failed</h2>
-                    <p><strong>Error:</strong> ${error.message}</p>
-                    <p><strong>Domain:</strong> ${req.query.domain || 'Not provided'}</p>
-                    <p><strong>Code present:</strong> ${!!req.query.code}</p>
-                    <p><strong>State present:</strong> ${!!req.query.state}</p>
-                    <p><strong>Time:</strong> ${new Date().toISOString()}</p>
-                    <details>
-                        <summary>Debug Information</summary>
-                        <pre>${JSON.stringify({
-                            query: req.query,
-                            headers: {
-                                referer: req.headers.referer,
-                                'user-agent': req.headers['user-agent']
-                            },
-                            env: {
-                                APP_ID: process.env.APP_ID ? 'Set' : 'Missing',
-                                APP_SECRET: process.env.APP_SECRET ? 'Set' : 'Missing',
-                                BASE_URL: process.env.BASE_URL
-                            }
-                        }, null, 2)}</pre>
-                    </details>
-                    <p><a href="/">← Try Again</a></p>
-                </div>
-            </body>
-            </html>
-        `;
-        res.status(500).send(errorHtml);
+        console.error('❌ Token exchange failed:', error.message);
+        res.status(500).send('Failed to exchange token');
     }
 });
+
+app.get('/app', (req, res) => {
+    console.log('🎯 App route accessed');
+    console.log('📋 Query params:', req.query);
+    const domain = req.query.domain || req.query.DOMAIN;
+    const accessToken = req.query.access_token || req.query.AUTH_ID;
+    const isEmbedded = req.headers['x-bitrix24-domain'] || domain;
+    
+    if (isEmbedded && domain && accessToken) {
+        res.send(getBitrix24EmbeddedHTML(domain, accessToken));
+    } else {
+        res.send(getWhatsAppConnectorHTML());
+    }
+});
+
+function getBitrix24EmbeddedHTML(domain, accessToken) {
+    return `
+        <!DOCTYPE html>
+        <html>
+        <body>
+            <div id="qrCode"></div>
+            <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+            <script>
+                const domain = "${domain}";
+                const accessToken = "${accessToken}";
+                const socket = io('https://${process.env.BASE_URL.replace('https://', '')}', { 
+                    transports: ['websocket'], 
+                    reconnectionAttempts: 5 
+                });
+                socket.on('connect', () => {
+                    console.log('Socket connected, emitting initialize_whatsapp');
+                    socket.emit('initialize_whatsapp', { domain, accessToken });
+                });
+                socket.on('qr_code', (qr) => {
+                    console.log('QR received:', qr);
+                    document.getElementById('qrCode').innerText = qr; // Temporary display
+                    // Add QR code rendering logic here (e.g., using a QR library)
+                });
+                socket.on('error', (error) => console.error('Socket error:', error));
+            </script>
+        </body>
+        </html>
+    `;
+}
 app.get('/debug/config', function(req, res) {
     res.json({
         timestamp: new Date().toISOString(),
