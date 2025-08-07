@@ -1517,7 +1517,7 @@ try {
                             if (error.type === 'token_expired' || error.message.includes('401')) {
                                 document.getElementById("connectionStatus").className = "status error";
                                 document.getElementById("connectionStatus").innerHTML = `
-                                    <strong>❌ Token Expired</strong><br>
+                                    <strong>Token Expired</strong><br>
                                     Your Bitrix24 access token has expired. Please reconnect the application:<br>
                                     <button onclick="reconnectBitrix24()" style="margin-top: 10px; padding: 8px 16px; background: #25D366; color: white; border: none; border-radius: 4px; cursor: pointer;">
                                         🔄 Reconnect
