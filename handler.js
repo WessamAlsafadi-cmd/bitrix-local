@@ -49,7 +49,11 @@ class WhatsAppBitrix24Handler extends EventEmitter {
         this.isConnected = false;
         this.lastQRTime = 0;
         
-        // Bind this context to methods
+        // Cache for CRM entities
+        this.contactCache = new Map();
+        this.leadCache = new Map();
+        
+        // Bind methods to ensure 'this' context is preserved
         this.initWhatsApp = this.initWhatsApp.bind(this);
         this.handleConnectionUpdate = this.handleConnectionUpdate.bind(this);
         this.cleanup = this.cleanup.bind(this);
@@ -298,39 +302,285 @@ class WhatsAppBitrix24Handler extends EventEmitter {
     }
     
     /**
-     * Handle incoming WhatsApp messages
+     * Extract clean phone number from WhatsApp JID
+     */
+    extractPhoneNumber(jid) {
+        // Remove @s.whatsapp.net or @g.us
+        return jid.replace(/@[sg]\.(?:whatsapp\.net|us)/, '');
+    }
+    
+    /**
+     * Enhanced incoming message handler that creates/updates CRM entities
      */
     async handleIncomingWhatsAppMessage(message) {
         try {
             const messageData = {
                 messageId: message.key.id,
                 from: message.key.remoteJid,
+                phoneNumber: this.extractPhoneNumber(message.key.remoteJid),
                 text: message.message.conversation || 
                       message.message.extendedTextMessage?.text || 
                       message.message.imageMessage?.caption ||
                       '[Media Message]',
                 timestamp: message.messageTimestamp,
-                messageType: Object.keys(message.message)[0]
+                messageType: Object.keys(message.message)[0],
+                pushName: message.pushName || 'Unknown'
             };
             
-            console.log('📨 Incoming WhatsApp message:', {
-                messageId: messageData.messageId,
-                from: messageData.from,
-                type: messageData.messageType,
-                preview: messageData.text.substring(0, 100)
+            console.log('📨 Processing WhatsApp message:', {
+                from: messageData.phoneNumber,
+                name: messageData.pushName,
+                preview: messageData.text.substring(0, 50)
             });
             
+            // Emit to frontend
             this.emit('message_received', messageData);
-            await this.sendToBitrix24(messageData);
+            
+            // Process in Bitrix24 CRM
+            await this.processCRMIntegration(messageData);
             
         } catch (error) {
             console.error('❌ Error handling incoming message:', error.message);
             this.emit('error', 'Failed to process incoming message: ' + error.message);
         }
     }
+    
+    /**
+     * Process CRM integration for incoming messages
+     */
+    async processCRMIntegration(messageData) {
+        try {
+            if (!this.config.bitrix24Domain || !this.config.accessToken) {
+                console.warn('⚠️ Bitrix24 credentials not configured');
+                return;
+            }
+            
+            // Check if contact exists
+            let contactId = await this.findOrCreateContact(messageData);
+            
+            // Check if there's an open lead
+            let leadId = await this.findOrCreateLead(messageData, contactId);
+            
+            // Log the message as an activity
+            await this.createActivity(messageData, contactId, leadId);
+            
+            // Send to Open Channels if configured
+            await this.sendToOpenChannels(messageData, contactId);
+            
+        } catch (error) {
+            console.error('❌ CRM integration error:', error.message);
+        }
+    }
+    
+    /**
+     * Find or create a contact in Bitrix24
+     */
+    async findOrCreateContact(messageData) {
+        try {
+            const phoneNumber = messageData.phoneNumber;
+            
+            // Check cache first
+            if (this.contactCache.has(phoneNumber)) {
+                return this.contactCache.get(phoneNumber);
+            }
+            
+            // Search for existing contact
+            const searchUrl = `https://${this.config.bitrix24Domain}/rest/crm.contact.list`;
+            const searchResponse = await axios.post(searchUrl, {
+                filter: { 
+                    'PHONE': phoneNumber 
+                },
+                select: ['ID', 'NAME', 'LAST_NAME'],
+                access_token: this.config.accessToken
+            });
+            
+            if (searchResponse.data?.result?.length > 0) {
+                const contactId = searchResponse.data.result[0].ID;
+                this.contactCache.set(phoneNumber, contactId);
+                console.log('✅ Found existing contact:', contactId);
+                return contactId;
+            }
+            
+            // Create new contact
+            const createUrl = `https://${this.config.bitrix24Domain}/rest/crm.contact.add`;
+            const createResponse = await axios.post(createUrl, {
+                fields: {
+                    NAME: messageData.pushName || 'WhatsApp User',
+                    TYPE_ID: 'CLIENT',
+                    SOURCE_ID: 'OTHER',
+                    SOURCE_DESCRIPTION: 'WhatsApp',
+                    PHONE: [{ 
+                        VALUE: phoneNumber, 
+                        VALUE_TYPE: 'MOBILE' 
+                    }],
+                    COMMENTS: `First message: ${messageData.text}`
+                },
+                access_token: this.config.accessToken
+            });
+            
+            if (createResponse.data?.result) {
+                const contactId = createResponse.data.result;
+                this.contactCache.set(phoneNumber, contactId);
+                console.log('✅ Created new contact:', contactId);
+                return contactId;
+            }
+            
+        } catch (error) {
+            console.error('❌ Contact management error:', error.message);
+        }
+        return null;
+    }
+    
+    /**
+     * Find or create a lead for the conversation
+     */
+    async findOrCreateLead(messageData, contactId) {
+        try {
+            const phoneNumber = messageData.phoneNumber;
+            
+            // Check cache
+            if (this.leadCache.has(phoneNumber)) {
+                return this.leadCache.get(phoneNumber);
+            }
+            
+            // Search for open leads
+            const searchUrl = `https://${this.config.bitrix24Domain}/rest/crm.lead.list`;
+            const searchResponse = await axios.post(searchUrl, {
+                filter: { 
+                    'PHONE': phoneNumber,
+                    'STATUS_ID': ['NEW', 'IN_PROCESS'] // Only open leads
+                },
+                select: ['ID', 'TITLE'],
+                access_token: this.config.accessToken
+            });
+            
+            if (searchResponse.data?.result?.length > 0) {
+                const leadId = searchResponse.data.result[0].ID;
+                this.leadCache.set(phoneNumber, leadId);
+                console.log('✅ Found existing lead:', leadId);
+                return leadId;
+            }
+            
+            // Create new lead
+            const createUrl = `https://${this.config.bitrix24Domain}/rest/crm.lead.add`;
+            const createResponse = await axios.post(createUrl, {
+                fields: {
+                    TITLE: `WhatsApp: ${messageData.pushName || phoneNumber}`,
+                    STATUS_ID: 'NEW',
+                    SOURCE_ID: 'OTHER',
+                    SOURCE_DESCRIPTION: 'WhatsApp Message',
+                    PHONE: [{ 
+                        VALUE: phoneNumber, 
+                        VALUE_TYPE: 'MOBILE' 
+                    }],
+                    COMMENTS: messageData.text,
+                    CONTACT_ID: contactId
+                },
+                access_token: this.config.accessToken
+            });
+            
+            if (createResponse.data?.result) {
+                const leadId = createResponse.data.result;
+                this.leadCache.set(phoneNumber, leadId);
+                console.log('✅ Created new lead:', leadId);
+                return leadId;
+            }
+            
+        } catch (error) {
+            console.error('❌ Lead management error:', error.message);
+        }
+        return null;
+    }
+    
+    /**
+     * Create an activity for the message
+     */
+    async createActivity(messageData, contactId, leadId) {
+        try {
+            const url = `https://${this.config.bitrix24Domain}/rest/crm.activity.add`;
+            
+            const activityData = {
+                fields: {
+                    SUBJECT: `WhatsApp: ${messageData.text.substring(0, 50)}`,
+                    DESCRIPTION: messageData.text,
+                    TYPE_ID: 'MESSAGE',
+                    DIRECTION: messageData.pushName === 'Agent' ? 'OUTGOING' : 'INCOMING',
+                    COMPLETED: 'Y',
+                    PRIORITY: 'NORMAL',
+                    PROVIDER_ID: 'WHATSAPP',
+                    PROVIDER_TYPE_ID: 'IM',
+                    COMMUNICATIONS: [{
+                        TYPE: 'PHONE',
+                        VALUE: messageData.phoneNumber
+                    }]
+                },
+                access_token: this.config.accessToken
+            };
+            
+            // Add bindings
+            const bindings = [];
+            if (contactId) {
+                bindings.push({
+                    OWNER_TYPE_ID: 3, // Contact
+                    OWNER_ID: contactId
+                });
+            }
+            if (leadId) {
+                bindings.push({
+                    OWNER_TYPE_ID: 1, // Lead
+                    OWNER_ID: leadId
+                });
+            }
+            
+            if (bindings.length > 0) {
+                activityData.fields.BINDINGS = bindings;
+            }
+            
+            const response = await axios.post(url, activityData);
+            
+            if (response.data?.result) {
+                console.log('✅ Activity created:', response.data.result);
+            }
+            
+        } catch (error) {
+            console.error('❌ Activity creation error:', error.message);
+        }
+    }
+    
+    /**
+     * Send message to Bitrix24 Open Channels
+     */
+    async sendToOpenChannels(messageData, contactId) {
+        try {
+            const url = `https://${this.config.bitrix24Domain}/rest/imopenlines.message.send`;
+            
+            await axios.post(url, {
+                CONNECTOR: 'whatsapp_custom',
+                LINE: 'whatsapp',
+                MESSAGES: [{
+                    user: {
+                        id: messageData.phoneNumber,
+                        name: messageData.pushName || 'WhatsApp User',
+                        phone: messageData.phoneNumber
+                    },
+                    message: {
+                        text: messageData.text,
+                        date: Math.floor(Date.now() / 1000)
+                    }
+                }],
+                access_token: this.config.accessToken
+            });
+            
+            console.log('✅ Message sent to Open Channels');
+            
+        } catch (error) {
+            // Open Channels might not be configured, this is okay
+            console.log('ℹ️ Open Channels not configured or not available');
+        }
+    }
 
     /**
-     * Send message to Bitrix24
+     * Send message to Bitrix24 (legacy method for compatibility)
      */
     async sendToBitrix24(messageData) {
         try {
@@ -360,7 +610,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
     }
 
     /**
-     * Send outgoing message via WhatsApp
+     * Send outgoing message via WhatsApp with CRM activity logging
      */
     async sendOutgoingMessage(chatId, message, files = []) {
         try {
@@ -379,6 +629,19 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                 messageLength: message.length 
             });
             
+            // Log as CRM activity
+            const phoneNumber = this.extractPhoneNumber(cleanChatId);
+            const contactId = this.contactCache.get(phoneNumber);
+            const leadId = this.leadCache.get(phoneNumber);
+            
+            if (contactId || leadId) {
+                await this.createActivity({
+                    phoneNumber: phoneNumber,
+                    text: message,
+                    pushName: 'Agent'
+                }, contactId, leadId);
+            }
+            
         } catch (error) {
             console.error('❌ Error sending WhatsApp message:', error.message);
             this.emit('error', 'Failed to send message: ' + error.message);
@@ -396,7 +659,9 @@ class WhatsAppBitrix24Handler extends EventEmitter {
             activeSessions: this.chatSessions.size,
             connectionAttempts: this.connectionAttempts,
             hasSocket: !!this.sock,
-            socketState: this.sock?.ws?.readyState || 'unknown'
+            socketState: this.sock?.ws?.readyState || 'unknown',
+            cachedContacts: this.contactCache.size,
+            cachedLeads: this.leadCache.size
         };
     }
 
@@ -439,6 +704,8 @@ class WhatsAppBitrix24Handler extends EventEmitter {
             
             this.chatSessions.clear();
             this.messageQueue = [];
+            this.contactCache.clear();
+            this.leadCache.clear();
             
             console.log('🧹 Handler cleaned up successfully');
             
