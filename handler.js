@@ -613,45 +613,140 @@ class WhatsAppBitrix24Handler extends EventEmitter {
      * Send outgoing message via WhatsApp with CRM activity logging
      */
     async sendOutgoingMessage(chatId, message, files = []) {
-        try {
-            if (!this.sock || !this.isConnected) {
-                throw new Error('WhatsApp not connected');
-            }
-
-            // Clean up chatId format
-            const cleanChatId = chatId.includes('@s.whatsapp.net') ? 
-                chatId : 
-                `${chatId}@s.whatsapp.net`;
-
-            await this.sock.sendMessage(cleanChatId, { text: message });
-            console.log('✅ Outgoing message sent to WhatsApp:', { 
-                chatId: cleanChatId, 
-                messageLength: message.length 
-            });
-            
-            // Log as CRM activity
-            const phoneNumber = this.extractPhoneNumber(cleanChatId);
-            const contactId = this.contactCache.get(phoneNumber);
-            const leadId = this.leadCache.get(phoneNumber);
-            
-            if (contactId || leadId) {
-                await this.createActivity({
-                    phoneNumber: phoneNumber,
-                    text: message,
-                    pushName: 'Agent'
-                }, contactId, leadId);
-            }
-            
-        } catch (error) {
-            console.error('❌ Error sending WhatsApp message:', error.message);
-            this.emit('error', 'Failed to send message: ' + error.message);
-            throw error;
+    try {
+        if (!this.sock || !this.isConnected) {
+            throw new Error('WhatsApp not connected');
         }
-    }
 
-    /**
-     * Get connection status
-     */
+        // Clean and format the phone number properly
+        let cleanChatId = chatId.toString().trim();
+        
+        // Remove any non-numeric characters except +
+        cleanChatId = cleanChatId.replace(/[^\d+]/g, '');
+        
+        // Remove leading zeros
+        cleanChatId = cleanChatId.replace(/^0+/, '');
+        
+        // Handle different phone number formats
+        if (cleanChatId.startsWith('+')) {
+            cleanChatId = cleanChatId.substring(1); // Remove the +
+        }
+        
+        // For UAE numbers (971), ensure proper formatting
+        if (cleanChatId.startsWith('971')) {
+            // Already has country code
+        } else if (cleanChatId.startsWith('5') && cleanChatId.length === 9) {
+            // UAE mobile without country code
+            cleanChatId = '971' + cleanChatId;
+        } else if (cleanChatId.startsWith('05') && cleanChatId.length === 10) {
+            // UAE mobile with leading 0
+            cleanChatId = '971' + cleanChatId.substring(1);
+        }
+        
+        // Add WhatsApp suffix if not present
+        if (!cleanChatId.includes('@')) {
+            cleanChatId = cleanChatId + '@s.whatsapp.net';
+        }
+        
+        console.log('📱 Formatted phone number:', cleanChatId);
+        
+        // Check if the number exists on WhatsApp first
+        try {
+            const [result] = await this.sock.onWhatsApp(cleanChatId.replace('@s.whatsapp.net', ''));
+            if (!result || !result.exists) {
+                throw new Error('This phone number is not registered on WhatsApp');
+            }
+            console.log('✅ Number verified on WhatsApp:', result.jid);
+            cleanChatId = result.jid; // Use the verified JID
+        } catch (checkError) {
+            console.error('⚠️ Could not verify number on WhatsApp:', checkError.message);
+            // Continue anyway, might still work
+        }
+        
+        // Send the message with timeout handling
+        const sendPromise = this.sock.sendMessage(cleanChatId, { text: message });
+        
+        // Create a timeout promise
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Message send timeout after 30 seconds')), 30000);
+        });
+        
+        // Race between send and timeout
+        await Promise.race([sendPromise, timeoutPromise]);
+        
+        console.log('✅ Outgoing message sent to WhatsApp:', { 
+            chatId: cleanChatId, 
+            messageLength: message.length 
+        });
+        
+        // Log as CRM activity
+        const phoneNumber = this.extractPhoneNumber(cleanChatId);
+        const contactId = this.contactCache.get(phoneNumber);
+        const leadId = this.leadCache.get(phoneNumber);
+        
+        if (contactId || leadId) {
+            await this.createActivity({
+                phoneNumber: phoneNumber,
+                text: message,
+                pushName: 'Agent'
+            }, contactId, leadId);
+        }
+        
+        return { success: true, chatId: cleanChatId };
+        
+    } catch (error) {
+        console.error('❌ Error sending WhatsApp message:', error.message);
+        console.error('📊 Error details:', {
+            errorType: error.name,
+            errorMessage: error.message,
+            chatId: chatId
+        });
+        this.emit('error', 'Failed to send message: ' + error.message);
+        throw error;
+    }
+}
+
+// ALSO ADD THIS METHOD for better session handling:
+
+/**
+ * Get stored session for a specific Bitrix24 domain
+ */
+getSessionPath(domain) {
+    // Use domain-specific auth directory instead of socket-specific
+    const sanitizedDomain = domain.replace(/[^a-z0-9]/gi, '_');
+    return `./auth_${sanitizedDomain}`;
+}
+
+/**
+ * Initialize WhatsApp with persistent session
+ */
+async initWhatsAppWithSession(domain) {
+    try {
+        // Use domain-based auth directory for persistence
+        const authDir = this.getSessionPath(domain);
+        
+        // Check if session exists
+        if (fs.existsSync(authDir)) {
+            const files = fs.readdirSync(authDir);
+            if (files.length > 0) {
+                console.log('📁 Found existing session for domain:', domain);
+                this.config.authDir = authDir;
+            }
+        } else {
+            // Create new session directory
+            fs.mkdirSync(authDir, { recursive: true });
+            this.config.authDir = authDir;
+            console.log('📁 Created new session directory for domain:', domain);
+        }
+        
+        // Now initialize WhatsApp with the persistent session
+        await this.initWhatsApp();
+        
+    } catch (error) {
+        console.error('❌ Error initializing with session:', error.message);
+        throw error;
+    }
+}
     getConnectionStatus() {
         return {
             connected: this.isConnected,
