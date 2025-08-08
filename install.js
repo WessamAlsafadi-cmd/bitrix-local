@@ -177,6 +177,8 @@ try {
         // Add this modified socket handler to your install.js file
 // Replace the existing 'initialize_whatsapp' socket handler with this:
 
+// Replace the socket 'initialize_whatsapp' handler in install.js with this:
+
 socket.on('initialize_whatsapp', async function(data) {
     try {
         console.log('🔄 WhatsApp initialization request from:', socket.id);
@@ -187,17 +189,6 @@ socket.on('initialize_whatsapp', async function(data) {
             installationMode: data.installationMode,
             timestamp: new Date().toISOString()
         });
-        
-        // For Bitrix24 installation mode, the accessToken is actually AUTH_ID
-        // We need to validate it's a proper token format
-        let validAccessToken = data.accessToken;
-        
-        // Check if this is an installation AUTH_ID (longer format)
-        if (data.installationMode && data.accessToken && data.accessToken.length > 50) {
-            console.log('🔑 Using Bitrix24 installation AUTH_ID as access token');
-            // The AUTH_ID can be used directly for API calls in installation context
-            validAccessToken = data.accessToken;
-        }
         
         // Validate required parameters
         if (!data.domain) {
@@ -210,9 +201,41 @@ socket.on('initialize_whatsapp', async function(data) {
             return;
         }
         
-        // For WhatsApp initialization, we don't actually need the Bitrix24 token
-        // The WhatsApp handler just needs the domain for reference
-        console.log('🔍 Domain detected:', data.domain);
+        // Use domain-based auth directory for session persistence
+        const sanitizedDomain = data.domain.replace(/[^a-z0-9]/gi, '_');
+        const persistentAuthDir = `./auth_${sanitizedDomain}`;
+        
+        console.log('🔍 Using persistent auth directory:', persistentAuthDir);
+        
+        // Check if we already have a handler for this domain
+        let existingHandler = null;
+        for (const [sid, handler] of whatsappHandlers) {
+            if (handler.config.bitrix24Domain === data.domain && handler.isConnected) {
+                existingHandler = handler;
+                console.log('♻️ Found existing connected handler for domain');
+                break;
+            }
+        }
+        
+        if (existingHandler) {
+            // Reuse existing connected handler
+            whatsappHandlers.set(socket.id, existingHandler);
+            setupHandlerEventListeners(socket, existingHandler);
+            
+            // Emit connected status immediately
+            socket.emit('whatsapp_connected', {
+                timestamp: new Date().toISOString(),
+                message: 'WhatsApp already connected!'
+            });
+            
+            socket.emit('status_update', {
+                type: 'info',
+                message: 'Using existing WhatsApp connection',
+                timestamp: new Date().toISOString()
+            });
+            
+            return;
+        }
         
         // Clean up any existing handler for this socket
         await cleanupSocketHandler(socket.id);
@@ -220,7 +243,7 @@ socket.on('initialize_whatsapp', async function(data) {
         // Store connection info
         activeConnections.set(socket.id, {
             domain: data.domain,
-            accessToken: validAccessToken,
+            accessToken: data.accessToken,
             refreshToken: data.refreshToken,
             connectedAt: new Date().toISOString(),
             lastActivity: new Date().toISOString(),
@@ -229,15 +252,13 @@ socket.on('initialize_whatsapp', async function(data) {
         
         console.log('🏗️ Creating WhatsApp handler for socket:', socket.id);
         
-        // Create new WhatsApp handler
-        // Note: The WhatsApp handler doesn't actually need the Bitrix24 token to work
-        // It's only needed when sending messages TO Bitrix24
+        // Create new WhatsApp handler with persistent auth directory
         const whatsappHandler = new WhatsAppBitrix24Handler({
             bitrix24Domain: data.domain,
-            accessToken: validAccessToken, // This is optional for WhatsApp connection
+            accessToken: data.accessToken,
             refreshToken: data.refreshToken,
             connectorId: data.connectorId || 'custom_whatsapp',
-            authDir: `./auth_${socket.id}`, // Unique auth directory per socket
+            authDir: persistentAuthDir, // Use domain-based directory
             socketId: socket.id
         });
         
@@ -255,11 +276,32 @@ socket.on('initialize_whatsapp', async function(data) {
         }
         
         console.log('🚀 Starting WhatsApp initialization for socket:', socket.id);
-        socket.emit('status_update', {
-            type: 'info',
-            message: 'Initializing WhatsApp connection...',
-            timestamp: new Date().toISOString()
-        });
+        
+        // Check if session exists
+        const fs = require('fs');
+        let hasExistingSession = false;
+        
+        if (fs.existsSync(persistentAuthDir)) {
+            const sessionFiles = fs.readdirSync(persistentAuthDir);
+            hasExistingSession = sessionFiles.length > 0;
+            
+            if (hasExistingSession) {
+                console.log('📱 Found existing WhatsApp session, attempting to restore...');
+                socket.emit('status_update', {
+                    type: 'info',
+                    message: 'Restoring previous WhatsApp session...',
+                    timestamp: new Date().toISOString()
+                });
+            }
+        }
+        
+        if (!hasExistingSession) {
+            socket.emit('status_update', {
+                type: 'info',
+                message: 'Initializing new WhatsApp connection...',
+                timestamp: new Date().toISOString()
+            });
+        }
         
         // Initialize WhatsApp with timeout protection
         const initTimeout = setTimeout(() => {
@@ -272,10 +314,19 @@ socket.on('initialize_whatsapp', async function(data) {
         }, 60000); // 60 second timeout
         
         try {
-            // Initialize WhatsApp (this will generate QR code)
+            // Initialize WhatsApp (will use existing session if available)
             await whatsappHandler.initWhatsApp();
             clearTimeout(initTimeout);
             console.log('✅ WhatsApp handler initialized successfully');
+            
+            // If already connected (restored session), emit connected event
+            if (whatsappHandler.isConnected) {
+                socket.emit('whatsapp_connected', {
+                    timestamp: new Date().toISOString(),
+                    message: 'WhatsApp session restored successfully!'
+                });
+            }
+            
         } catch (initError) {
             clearTimeout(initTimeout);
             console.error('❌ WhatsApp init error:', initError.message);
@@ -295,8 +346,7 @@ socket.on('initialize_whatsapp', async function(data) {
         // Cleanup on error
         await cleanupSocketHandler(socket.id);
     }
-});
-        // Enhanced message sending with validation
+});        // Enhanced message sending with validation
         socket.on('send_message', async function(data) {
             try {
                 console.log('📤 Send message request from socket:', socket.id);
@@ -597,35 +647,41 @@ socket.on('initialize_whatsapp', async function(data) {
 
     // Enhanced cleanup function
     async function cleanupSocketHandler(socketId) {
-        try {
-            console.log('🧹 Cleaning up handler for socket:', socketId);
-            
-            // Clear cleanup timeout if exists
-            const cleanupTimeout = connectionCleanupTimeouts.get(socketId);
-            if (cleanupTimeout) {
-                clearTimeout(cleanupTimeout);
-                connectionCleanupTimeouts.delete(socketId);
-            }
-            
-            // Cleanup WhatsApp handler
-            const handler = whatsappHandlers.get(socketId);
-            if (handler) {
-                console.log('🔌 Disconnecting WhatsApp handler for socket:', socketId);
-                await handler.cleanup();
-                whatsappHandlers.delete(socketId);
-            }
-            
-            // Remove connection info
-            activeConnections.delete(socketId);
-            
-            console.log('✅ Cleanup completed for socket:', socketId);
-            console.log('📊 Active handlers:', whatsappHandlers.size, 'Active connections:', activeConnections.size);
-            
-        } catch (error) {
-            console.error('❌ Error during cleanup for socket', socketId + ':', error.message);
+    try {
+        console.log('🧹 Cleaning up handler for socket:', socketId);
+        
+        // Clear cleanup timeout if exists
+        const cleanupTimeout = connectionCleanupTimeouts.get(socketId);
+        if (cleanupTimeout) {
+            clearTimeout(cleanupTimeout);
+            connectionCleanupTimeouts.delete(socketId);
         }
+        
+        // Get handler but DON'T disconnect WhatsApp if it's connected
+        const handler = whatsappHandlers.get(socketId);
+        if (handler) {
+            // Only remove the handler reference, don't disconnect WhatsApp
+            // This preserves the session for reconnection
+            if (!handler.isConnected) {
+                // Only cleanup if not connected
+                console.log('🔌 Cleaning up disconnected handler for socket:', socketId);
+                await handler.cleanup();
+            } else {
+                console.log('📱 Keeping WhatsApp session alive for socket:', socketId);
+            }
+            whatsappHandlers.delete(socketId);
+        }
+        
+        // Remove connection info
+        activeConnections.delete(socketId);
+        
+        console.log('✅ Cleanup completed for socket:', socketId);
+        console.log('📊 Active handlers:', whatsappHandlers.size, 'Active connections:', activeConnections.size);
+        
+    } catch (error) {
+        console.error('❌ Error during cleanup for socket', socketId + ':', error.message);
     }
-
+}
     // Periodic cleanup of stale connections
     setInterval(() => {
         const now = Date.now();
