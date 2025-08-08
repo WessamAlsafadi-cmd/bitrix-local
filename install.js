@@ -2004,70 +2004,174 @@ function getBitrix24EmbeddedHTML(domain, accessToken, refreshToken) {
                     }
                 }
                 
-                function connectSocket() {
-                    log("Connecting to WhatsApp service...");
-                    socket = io({ 
-                        transports: ["websocket"], 
-                        reconnectionAttempts: 5
-                    });
-                    
-                    socket.on("connect", function() {
-                        log("Socket connected");
-                        socket.emit("initialize_whatsapp", { 
-                            domain: currentDomain, 
-                            accessToken: currentAccessToken,
-                            refreshToken: currentRefreshToken,
-                            connectorId: 'bitrix24_whatsapp'
-                        });
-                        document.getElementById("step1").classList.remove("active");
-                        document.getElementById("step2").classList.add("active");
-                    });
-                    
-                    socket.on("qr_code", function(data) {
-                        if (!qrGenerated) {
-                            log("QR code received");
-                            const qrCode = new QRious({
-                                element: document.getElementById("qrCode"),
-                                value: data.qr,
-                                size: 200
-                            });
-                            document.getElementById("qrContainer").classList.remove("hidden");
-                            qrGenerated = true;
-                        }
-                    });
-                    
-                    socket.on("whatsapp_connected", function(data) {
-                        log("WhatsApp connected!");
-                        document.getElementById("step2").classList.remove("active");
-                        document.getElementById("step3").classList.add("active");
-                        document.getElementById("qrContainer").classList.add("hidden");
-                        document.getElementById("connectionStatus").className = "status success";
-                        document.getElementById("connectionStatus").textContent = "✅ Connected";
-                        document.getElementById("disconnectBtn").classList.remove("hidden");
-                        isConnected = true;
-                        showChatInterface();
-                    });
-                    
-                    socket.on("error", function(error) {
-                        log("Error: " + error.message);
-                        document.getElementById("connectionStatus").className = "status error";
-                        document.getElementById("connectionStatus").textContent = "Error: " + error.message;
-                    });
-                    
-                    socket.on("disconnect", function() {
-                        log("Socket disconnected");
-                        isConnected = false;
-                        qrGenerated = false;
-                    });
-                }
-                
-                document.getElementById("disconnectBtn").addEventListener("click", function() {
-                    if (socket && isConnected) {
-                        socket.emit("disconnect_whatsapp");
-                        document.getElementById("connectionStatus").textContent = "Disconnecting...";
-                    }
+                // Add this improved connectSocket function to your getBitrix24AppInstallationHTML
+// This handles session restoration and message sending properly
+
+function connectSocket(domain, accessToken) {
+    log("Connecting to WhatsApp service...");
+    currentDomain = domain;
+    currentAccessToken = accessToken;
+    
+    socket = io({ 
+        transports: ["websocket"], 
+        reconnectionAttempts: 5, 
+        reconnectionDelay: 1000 
+    });
+    
+    socket.on("connect", function() {
+        log("Socket.IO connected");
+        socket.emit("initialize_whatsapp", { 
+            domain: domain, 
+            accessToken: accessToken,
+            connectorId: 'bitrix24_whatsapp',
+            installationMode: true
+        });
+        document.getElementById("step1").classList.remove("active");
+        document.getElementById("step2").classList.add("active");
+    });
+    
+    socket.on("connect_error", function(error) {
+        log("Socket.IO connection error: " + error.message);
+        document.getElementById("connectionStatus").className = "status error";
+        document.getElementById("connectionStatus").textContent = "Connection failed: " + error.message;
+    });
+    
+    socket.on("connection_confirmed", function(data) {
+        log("Socket connected: " + data.socketId);
+    });
+    
+    socket.on("qr_code", function(data) {
+        if (!qrGenerated) {
+            log("QR code received, rendering...");
+            try {
+                const qrCode = new QRious({
+                    element: document.getElementById("qrCode"),
+                    value: data.qr,
+                    size: 250,
+                    level: 'H'
                 });
-                
+                document.getElementById("qrContainer").classList.remove("hidden");
+                document.getElementById("qrStatus").classList.remove("hidden");
+                qrGenerated = true;
+                log("QR code displayed - please scan with WhatsApp");
+            } catch (error) {
+                log("QR code rendering failed: " + error.message);
+            }
+        }
+    });
+    
+    socket.on("status_update", function(status) {
+        log("Status: " + status.message);
+        document.getElementById("qrStatus").textContent = status.message;
+        document.getElementById("connectionStatus").textContent = status.message;
+        
+        // Check if session was restored
+        if (status.message.includes("Restoring")) {
+            document.getElementById("qrContainer").classList.add("hidden");
+            document.getElementById("qrStatus").textContent = "Restoring session...";
+        }
+    });
+    
+    socket.on("whatsapp_connected", function(data) {
+        log("WhatsApp connected successfully!");
+        isConnected = true;
+        qrGenerated = false;
+        
+        updateStep(3);
+        document.getElementById("qrContainer").classList.add("hidden");
+        document.getElementById("qrStatus").classList.add("hidden");
+        document.getElementById("connectionStatus").className = "status success";
+        document.getElementById("connectionStatus").textContent = "✅ WhatsApp connected successfully!";
+        document.getElementById("connectionInfo").classList.remove("hidden");
+        document.getElementById("statusText").textContent = "Connected";
+        document.getElementById("connectedSince").textContent = new Date(data.timestamp).toLocaleString();
+        document.getElementById("disconnectBtn").classList.remove("hidden");
+        
+        showChatInterface();
+        
+        // Register webhook for incoming messages
+        registerWebhook();
+    });
+    
+    socket.on("message_received", function(data) {
+        log("Message received from: " + data.from);
+        addMessageToChat(data.text + " (from: " + data.phoneNumber + ")", 'received');
+        
+        // Send to Bitrix24 CRM
+        createLeadFromMessage(data);
+    });
+    
+    socket.on("message_sent", function(data) {
+        log("Message sent successfully to: " + data.chatId);
+        // Show success feedback
+        const statusDiv = document.createElement("div");
+        statusDiv.className = "status success";
+        statusDiv.textContent = "✅ Message sent successfully!";
+        document.getElementById("chatInterface").appendChild(statusDiv);
+        setTimeout(() => statusDiv.remove(), 3000);
+    });
+    
+    socket.on("error", function(error) {
+        log("Error [" + error.type + "]: " + error.message);
+        
+        if (error.message.includes("not registered on WhatsApp")) {
+            alert("This phone number is not registered on WhatsApp. Please check the number and try again.");
+        } else if (error.type === 'send_error') {
+            alert("Failed to send message: " + error.message);
+        } else {
+            document.getElementById("connectionStatus").className = "status error";
+            document.getElementById("connectionStatus").textContent = "Error: " + error.message;
+        }
+    });
+    
+    socket.on("disconnect", function() {
+        log("Socket disconnected");
+        isConnected = false;
+        document.getElementById("connectionStatus").className = "status error";
+        document.getElementById("connectionStatus").textContent = "Disconnected";
+        document.getElementById("sendMessageBtn").disabled = true;
+    });
+}
+
+// Improved send message handler with better phone number formatting
+document.getElementById("sendMessageBtn").addEventListener("click", function() {
+    let phone = document.getElementById("phoneNumber").value.trim();
+    const message = document.getElementById("messageInput").value.trim();
+    
+    if (!phone || !message) {
+        alert("Please enter both phone number and message");
+        return;
+    }
+    
+    if (!socket || !isConnected) {
+        alert("WhatsApp is not connected. Please wait for connection.");
+        return;
+    }
+    
+    // Format phone number properly
+    phone = phone.replace(/[\s\-\(\)]/g, ''); // Remove spaces, dashes, parentheses
+    
+    // Add country code if not present (default to UAE)
+    if (!phone.startsWith('+')) {
+        if (phone.startsWith('0')) {
+            phone = phone.substring(1); // Remove leading 0
+        }
+        if (phone.startsWith('5') && phone.length === 9) {
+            phone = '971' + phone; // UAE mobile
+        } else if (!phone.startsWith('971')) {
+            phone = '971' + phone; // Add UAE country code
+        }
+    }
+    
+    log("Sending message to " + phone);
+    socket.emit("send_message", {
+        chatId: phone,
+        message: message
+    });
+    
+    addMessageToChat(message + " (to: " + phone + ")", 'sent');
+    document.getElementById("messageInput").value = "";
+});                
                 // Initialize on page load
                 window.addEventListener("load", function() {
                     initializeBitrix24();
