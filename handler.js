@@ -491,7 +491,373 @@ class WhatsAppBitrix24Handler extends EventEmitter {
         }
         return null;
     }
+
+    // Enhanced handler.js methods - ADD these methods to your existing WhatsAppBitrix24Handler class
+
+/**
+ * Enhanced initialization with lead context support
+ */
+async initWhatsAppWithLeadContext(initData) {
+    try {
+        this.leadContext = initData.leadContext || null;
+        
+        if (this.leadContext) {
+            console.log('🎯 Initializing with lead context:', {
+                leadId: this.leadContext.leadId,
+                phoneNumber: this.leadContext.phoneNumber
+            });
+            
+            // Set up lead-specific configuration
+            this.currentLeadId = this.leadContext.leadId;
+            this.currentPhoneNumber = this.leadContext.phoneNumber;
+            
+            // Load existing conversation history for this lead
+            await this.loadLeadConversationHistory();
+        }
+        
+        // Continue with normal WhatsApp initialization
+        await this.initWhatsApp();
+        
+    } catch (error) {
+        console.error('❌ Error initializing with lead context:', error.message);
+        throw error;
+    }
+}
+
+/**
+ * Load conversation history for a specific lead
+ */
+async loadLeadConversationHistory() {
+    try {
+        if (!this.config.bitrix24Domain || !this.config.accessToken || !this.currentLeadId) {
+            console.log('ℹ️ Insufficient data to load lead conversation history');
+            return [];
+        }
+        
+        console.log('📚 Loading conversation history for lead:', this.currentLeadId);
+        
+        const url = `https://${this.config.bitrix24Domain}/rest/crm.activity.list`;
+        const response = await axios.post(url, {
+            filter: {
+                OWNER_TYPE_ID: 1, // Lead
+                OWNER_ID: this.currentLeadId,
+                PROVIDER_ID: 'WHATSAPP',
+                TYPE_ID: 'MESSAGE'
+            },
+            order: { CREATED: 'ASC' },
+            select: ['ID', 'SUBJECT', 'DESCRIPTION', 'DIRECTION', 'CREATED', 'COMMUNICATIONS'],
+            access_token: this.config.accessToken
+        });
+        
+        if (response.data?.result) {
+            const activities = response.data.result;
+            console.log(`📚 Found ${activities.length} previous messages for lead ${this.currentLeadId}`);
+            
+            // Emit conversation history to frontend
+            this.emit('conversation_history', {
+                leadId: this.currentLeadId,
+                messages: activities.map(activity => ({
+                    id: activity.ID,
+                    text: activity.DESCRIPTION || activity.SUBJECT,
+                    direction: activity.DIRECTION,
+                    timestamp: activity.CREATED,
+                    type: activity.DIRECTION === 'OUTGOING' ? 'sent' : 'received'
+                }))
+            });
+            
+            return activities;
+        }
+        
+        return [];
+        
+    } catch (error) {
+        console.error('❌ Error loading lead conversation history:', error.message);
+        return [];
+    }
+}
+
+/**
+ * Enhanced incoming message handler with lead context filtering
+ */
+async handleIncomingWhatsAppMessageWithContext(message) {
+    try {
+        const messageData = {
+            messageId: message.key.id,
+            from: message.key.remoteJid,
+            phoneNumber: this.extractPhoneNumber(message.key.remoteJid),
+            text: message.message.conversation || 
+                  message.message.extendedTextMessage?.text || 
+                  message.message.imageMessage?.caption ||
+                  '[Media Message]',
+            timestamp: message.messageTimestamp,
+            messageType: Object.keys(message.message)[0],
+            pushName: message.pushName || 'Unknown'
+        };
+        
+        console.log('📨 Processing WhatsApp message with context:', {
+            from: messageData.phoneNumber,
+            name: messageData.pushName,
+            leadContext: !!this.leadContext,
+            currentLeadPhone: this.currentPhoneNumber
+        });
+        
+        // Check if this message is relevant to the current lead context
+        const isRelevantToCurrentLead = this.isMessageRelevantToCurrentLead(messageData);
+        
+        if (isRelevantToCurrentLead || !this.leadContext) {
+            // Emit to frontend (only relevant messages)
+            this.emit('message_received', {
+                ...messageData,
+                isLeadRelevant: isRelevantToCurrentLead,
+                leadId: this.currentLeadId
+            });
+            
+            // Process in Bitrix24 CRM
+            await this.processCRMIntegrationWithContext(messageData);
+        } else {
+            console.log('🔽 Message filtered out - not relevant to current lead context');
+        }
+        
+    } catch (error) {
+        console.error('❌ Error handling incoming message with context:', error.message);
+        this.emit('error', 'Failed to process incoming message: ' + error.message);
+    }
+}
+
+/**
+ * Check if a message is relevant to the current lead context
+ */
+isMessageRelevantToCurrentLead(messageData) {
+    if (!this.leadContext || !this.currentPhoneNumber) {
+        return true; // No lead context = show all messages
+    }
     
+    // Normalize phone numbers for comparison
+    const messagePhone = this.normalizePhoneNumber(messageData.phoneNumber);
+    const leadPhone = this.normalizePhoneNumber(this.currentPhoneNumber);
+    
+    return messagePhone === leadPhone;
+}
+
+/**
+ * Normalize phone number for consistent comparison
+ */
+normalizePhoneNumber(phone) {
+    if (!phone) return '';
+    
+    // Remove all non-digit characters
+    let normalized = phone.replace(/\D/g, '');
+    
+    // Handle UAE numbers specifically
+    if (normalized.startsWith('971')) {
+        return normalized;
+    } else if (normalized.startsWith('05') && normalized.length === 10) {
+        return '971' + normalized.substring(1);
+    } else if (normalized.startsWith('5') && normalized.length === 9) {
+        return '971' + normalized;
+    }
+    
+    return normalized;
+}
+
+/**
+ * Enhanced CRM integration with lead context
+ */
+async processCRMIntegrationWithContext(messageData) {
+    try {
+        if (!this.config.bitrix24Domain || !this.config.accessToken) {
+            console.warn('⚠️ Bitrix24 credentials not configured');
+            return;
+        }
+        
+        let contactId = null;
+        let leadId = this.currentLeadId; // Use current lead context if available
+        
+        // If we have lead context, get the contact from the lead
+        if (this.currentLeadId) {
+            contactId = await this.getContactFromLead(this.currentLeadId);
+        }
+        
+        // If no lead context or contact not found, find/create contact
+        if (!contactId) {
+            contactId = await this.findOrCreateContact(messageData);
+        }
+        
+        // If no current lead, find or create one
+        if (!leadId) {
+            leadId = await this.findOrCreateLead(messageData, contactId);
+        }
+        
+        // Log the message as an activity (always associated with the lead)
+        await this.createActivityWithLeadContext(messageData, contactId, leadId);
+        
+    } catch (error) {
+        console.error('❌ CRM integration with context error:', error.message);
+    }
+}
+
+/**
+ * Get contact ID from lead
+ */
+async getContactFromLead(leadId) {
+    try {
+        const url = `https://${this.config.bitrix24Domain}/rest/crm.lead.get`;
+        const response = await axios.post(url, {
+            id: leadId,
+            access_token: this.config.accessToken
+        });
+        
+        if (response.data?.result?.CONTACT_ID) {
+            console.log('✅ Found contact from lead:', response.data.result.CONTACT_ID);
+            return response.data.result.CONTACT_ID;
+        }
+        
+        return null;
+        
+    } catch (error) {
+        console.error('❌ Error getting contact from lead:', error.message);
+        return null;
+    }
+}
+
+/**
+ * Create activity with lead context
+ */
+async createActivityWithLeadContext(messageData, contactId, leadId) {
+    try {
+        const url = `https://${this.config.bitrix24Domain}/rest/crm.activity.add`;
+        
+        const activityData = {
+            fields: {
+                SUBJECT: `WhatsApp: ${messageData.text.substring(0, 50)}`,
+                DESCRIPTION: messageData.text,
+                TYPE_ID: 'MESSAGE',
+                DIRECTION: messageData.pushName === 'Agent' ? 'OUTGOING' : 'INCOMING',
+                COMPLETED: 'Y',
+                PRIORITY: 'NORMAL',
+                PROVIDER_ID: 'WHATSAPP',
+                PROVIDER_TYPE_ID: 'IM',
+                COMMUNICATIONS: [{
+                    TYPE: 'PHONE',
+                    VALUE: messageData.phoneNumber
+                }]
+            },
+            access_token: this.config.accessToken
+        };
+        
+        // Add bindings with priority to lead
+        const bindings = [];
+        if (leadId) {
+            bindings.push({
+                OWNER_TYPE_ID: 1, // Lead
+                OWNER_ID: leadId
+            });
+        }
+        if (contactId) {
+            bindings.push({
+                OWNER_TYPE_ID: 3, // Contact
+                OWNER_ID: contactId
+            });
+        }
+        
+        if (bindings.length > 0) {
+            activityData.fields.BINDINGS = bindings;
+        }
+        
+        const response = await axios.post(url, activityData);
+        
+        if (response.data?.result) {
+            console.log('✅ Activity created with lead context:', response.data.result);
+            
+            // Emit activity created event
+            this.emit('activity_created', {
+                activityId: response.data.result,
+                leadId: leadId,
+                contactId: contactId,
+                messageData: messageData
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ Activity creation with context error:', error.message);
+    }
+}
+
+/**
+ * Enhanced send message with lead context
+ */
+async sendOutgoingMessageWithContext(chatId, message, leadId = null) {
+    try {
+        // Use the existing sendOutgoingMessage method
+        const result = await this.sendOutgoingMessage(chatId, message);
+        
+        // If successful and we have lead context, log the activity
+        if (result.success && (leadId || this.currentLeadId)) {
+            const targetLeadId = leadId || this.currentLeadId;
+            const phoneNumber = this.extractPhoneNumber(result.chatId);
+            
+            // Log as outgoing activity
+            await this.createActivityWithLeadContext({
+                phoneNumber: phoneNumber,
+                text: message,
+                pushName: 'Agent'
+            }, null, targetLeadId);
+            
+            console.log('✅ Outgoing message logged to lead:', targetLeadId);
+        }
+        
+        return result;
+        
+    } catch (error) {
+        console.error('❌ Error sending message with context:', error.message);
+        throw error;
+    }
+}
+
+/**
+ * Get lead information by ID
+ */
+async getLeadInfo(leadId) {
+    try {
+        if (!this.config.bitrix24Domain || !this.config.accessToken || !leadId) {
+            return null;
+        }
+        
+        const url = `https://${this.config.bitrix24Domain}/rest/crm.lead.get`;
+        const response = await axios.post(url, {
+            id: leadId,
+            access_token: this.config.accessToken
+        });
+        
+        if (response.data?.result) {
+            console.log('✅ Lead info retrieved:', response.data.result.TITLE);
+            return response.data.result;
+        }
+        
+        return null;
+        
+    } catch (error) {
+        console.error('❌ Error getting lead info:', error.message);
+        return null;
+    }
+}
+
+/**
+ * Enhanced connection status with lead context
+ */
+getConnectionStatusWithContext() {
+    const baseStatus = this.getConnectionStatus();
+    
+    return {
+        ...baseStatus,
+        leadContext: {
+            hasLeadContext: !!this.leadContext,
+            currentLeadId: this.currentLeadId,
+            currentPhoneNumber: this.currentPhoneNumber,
+            contextActive: !!(this.currentLeadId && this.currentPhoneNumber)
+        }
+    };
+}
     /**
      * Create an activity for the message
      */
