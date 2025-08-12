@@ -179,6 +179,9 @@ try {
 
 // Replace the socket 'initialize_whatsapp' handler in install.js with this:
 
+// Add these modifications to your install.js file
+
+// 1. MODIFIED: Enhanced Socket Handler for Lead-Specific Chat
 socket.on('initialize_whatsapp', async function(data) {
     try {
         console.log('🔄 WhatsApp initialization request from:', socket.id);
@@ -186,7 +189,8 @@ socket.on('initialize_whatsapp', async function(data) {
             domain: data.domain,
             hasAccessToken: !!data.accessToken,
             connectorId: data.connectorId,
-            installationMode: data.installationMode,
+            leadId: data.leadId, // NEW: Lead-specific initialization
+            leadPhone: data.leadPhone, // NEW: Lead phone number
             timestamp: new Date().toISOString()
         });
         
@@ -201,11 +205,18 @@ socket.on('initialize_whatsapp', async function(data) {
             return;
         }
         
+        // NEW: Store lead-specific information
+        const leadInfo = {
+            leadId: data.leadId,
+            leadPhone: data.leadPhone
+        };
+        
         // Use domain-based auth directory for session persistence
         const sanitizedDomain = data.domain.replace(/[^a-z0-9]/gi, '_');
         const persistentAuthDir = `./auth_${sanitizedDomain}`;
         
         console.log('🔍 Using persistent auth directory:', persistentAuthDir);
+        console.log('👤 Lead-specific chat for Lead ID:', data.leadId, 'Phone:', data.leadPhone);
         
         // Check if we already have a handler for this domain
         let existingHandler = null;
@@ -218,14 +229,28 @@ socket.on('initialize_whatsapp', async function(data) {
         }
         
         if (existingHandler) {
-            // Reuse existing connected handler
+            // Reuse existing connected handler but store lead info
             whatsappHandlers.set(socket.id, existingHandler);
-            setupHandlerEventListeners(socket, existingHandler);
+            
+            // NEW: Store lead information for this socket
+            activeConnections.set(socket.id, {
+                domain: data.domain,
+                accessToken: data.accessToken,
+                refreshToken: data.refreshToken,
+                leadId: data.leadId,
+                leadPhone: data.leadPhone,
+                connectedAt: new Date().toISOString(),
+                lastActivity: new Date().toISOString(),
+                status: 'connected'
+            });
+            
+            setupHandlerEventListeners(socket, existingHandler, leadInfo);
             
             // Emit connected status immediately
             socket.emit('whatsapp_connected', {
                 timestamp: new Date().toISOString(),
-                message: 'WhatsApp already connected!'
+                message: 'WhatsApp already connected!',
+                leadId: data.leadId
             });
             
             socket.emit('status_update', {
@@ -240,11 +265,13 @@ socket.on('initialize_whatsapp', async function(data) {
         // Clean up any existing handler for this socket
         await cleanupSocketHandler(socket.id);
         
-        // Store connection info
+        // Store connection info with lead data
         activeConnections.set(socket.id, {
             domain: data.domain,
             accessToken: data.accessToken,
             refreshToken: data.refreshToken,
+            leadId: data.leadId, // NEW
+            leadPhone: data.leadPhone, // NEW
             connectedAt: new Date().toISOString(),
             lastActivity: new Date().toISOString(),
             status: 'initializing'
@@ -258,15 +285,17 @@ socket.on('initialize_whatsapp', async function(data) {
             accessToken: data.accessToken,
             refreshToken: data.refreshToken,
             connectorId: data.connectorId || 'custom_whatsapp',
-            authDir: persistentAuthDir, // Use domain-based directory
-            socketId: socket.id
+            authDir: persistentAuthDir,
+            socketId: socket.id,
+            leadId: data.leadId, // NEW: Pass lead info to handler
+            leadPhone: data.leadPhone // NEW: Pass lead phone to handler
         });
         
         // Store the handler
         whatsappHandlers.set(socket.id, whatsappHandler);
         
-        // Set up enhanced event listeners with error handling
-        setupHandlerEventListeners(socket, whatsappHandler);
+        // Set up enhanced event listeners with lead info
+        setupHandlerEventListeners(socket, whatsappHandler, leadInfo);
         
         // Update connection status
         const connection = activeConnections.get(socket.id);
@@ -275,9 +304,8 @@ socket.on('initialize_whatsapp', async function(data) {
             connection.lastActivity = new Date().toISOString();
         }
         
-        console.log('🚀 Starting WhatsApp initialization for socket:', socket.id);
+        console.log('🚀 Starting WhatsApp initialization for lead chat');
         
-        // Check if session exists
         const fs = require('fs');
         let hasExistingSession = false;
         
@@ -302,102 +330,6 @@ socket.on('initialize_whatsapp', async function(data) {
                 timestamp: new Date().toISOString()
             });
         }
-        
-        // Initialize WhatsApp with timeout protection
-        const initTimeout = setTimeout(() => {
-            console.warn('⚠️ WhatsApp initialization timeout for socket:', socket.id);
-            socket.emit('error', {
-                type: 'init_timeout',
-                message: 'WhatsApp initialization timed out. Please try again.',
-                timestamp: new Date().toISOString()
-            });
-        }, 60000); // 60 second timeout
-        
-        try {
-            // Initialize WhatsApp (will use existing session if available)
-            await whatsappHandler.initWhatsApp();
-            clearTimeout(initTimeout);
-            console.log('✅ WhatsApp handler initialized successfully');
-            
-            // If already connected (restored session), emit connected event
-            if (whatsappHandler.isConnected) {
-                socket.emit('whatsapp_connected', {
-                    timestamp: new Date().toISOString(),
-                    message: 'WhatsApp session restored successfully!'
-                });
-            }
-            
-        } catch (initError) {
-            clearTimeout(initTimeout);
-            console.error('❌ WhatsApp init error:', initError.message);
-            throw initError;
-        }
-        
-    } catch (error) {
-        console.error('❌ Error initializing WhatsApp for socket', socket.id + ':', error.message);
-        console.error('📊 Error stack:', error.stack);
-        
-        socket.emit('error', {
-            type: 'init_error',
-            message: error.message,
-            timestamp: new Date().toISOString()
-        });
-        
-        // Cleanup on error
-        await cleanupSocketHandler(socket.id);
-    }
-});        // Enhanced message sending with validation
-        socket.on('send_message', async function(data) {
-            try {
-                console.log('📤 Send message request from socket:', socket.id);
-                
-                const handler = whatsappHandlers.get(socket.id);
-                if (!handler) {
-                    socket.emit('error', {
-                        type: 'no_handler',
-                        message: 'WhatsApp not connected. Please initialize first.',
-                        timestamp: new Date().toISOString()
-                    });
-                    return;
-                }
-                
-                // Validate message data
-                if (!data.chatId || !data.message) {
-                    socket.emit('error', {
-                        type: 'invalid_message_data',
-                        message: 'Missing chatId or message content',
-                        timestamp: new Date().toISOString()
-                    });
-                    return;
-                }
-                
-                // Update last activity
-                const connection = activeConnections.get(socket.id);
-                if (connection) {
-                    connection.lastActivity = new Date().toISOString();
-                }
-                
-                const { chatId, message, files } = data;
-                console.log('📨 Sending message to:', chatId, 'length:', message.length);
-                
-                await handler.sendOutgoingMessage(chatId, message, files);
-                
-                socket.emit('message_sent', { 
-                    success: true,
-                    chatId: chatId,
-                    timestamp: new Date().toISOString()
-                });
-                
-            } catch (error) {
-                console.error('❌ Error sending message for socket', socket.id + ':', error.message);
-                socket.emit('error', {
-                    type: 'send_error',
-                    message: error.message,
-                    timestamp: new Date().toISOString()
-                });
-            }
-        });
-
         // Simplified send_whatsapp_message (alias for send_message)
         socket.on('send_whatsapp_message', function(data) {
             socket.emit('send_message', data);
