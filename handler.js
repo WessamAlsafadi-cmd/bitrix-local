@@ -344,9 +344,9 @@ class WhatsAppBitrix24Handler extends EventEmitter {
     }
     
     /**
-     * Initialize with lead context
+     * ENHANCED: Initialize with lead context
      */
-    async initializeWithLeadContext(leadId) {
+    async initializeWithLeadContext(leadId, phoneNumber = null) {
         try {
             if (!leadId) {
                 console.log('ℹ️ No lead ID provided - using general mode');
@@ -358,12 +358,14 @@ class WhatsAppBitrix24Handler extends EventEmitter {
             // Get lead data including phone number
             const leadData = await this.getLeadWithPhoneNumber(leadId);
             
-            if (leadData && leadData.NORMALIZED_PHONE) {
+            if (leadData) {
                 this.currentLeadId = leadId;
-                this.currentPhoneNumber = leadData.NORMALIZED_PHONE;
+                this.currentPhoneNumber = leadData.NORMALIZED_PHONE || phoneNumber;
+                this.currentLeadData = leadData;
+                
                 this.leadContext = {
                     leadId: leadId,
-                    phoneNumber: leadData.NORMALIZED_PHONE,
+                    phoneNumber: this.currentPhoneNumber,
                     leadData: leadData
                 };
                 
@@ -378,7 +380,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                 
                 return this.leadContext;
             } else {
-                console.warn('⚠️ Could not get phone number for lead:', leadId);
+                console.warn('⚠️ Could not get lead data for ID:', leadId);
                 return null;
             }
             
@@ -430,7 +432,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
     }
     
     /**
-     * Load conversation history for current lead
+     * ENHANCED: Load conversation history for current lead
      */
     async loadLeadConversationHistory() {
         try {
@@ -446,8 +448,8 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                 filter: {
                     OWNER_TYPE_ID: 1, // Lead
                     OWNER_ID: this.currentLeadId,
-                    PROVIDER_ID: ['WHATSAPP', 'WHATSAPP_CUSTOM'],
-                    TYPE_ID: [4, 'MESSAGE'] // MESSAGE type
+                    PROVIDER_ID: 'WHATSAPP_CUSTOM',
+                    TYPE_ID: 4 // MESSAGE type
                 },
                 order: { CREATED: 'ASC' },
                 select: ['ID', 'SUBJECT', 'DESCRIPTION', 'DIRECTION', 'CREATED', 'COMMUNICATIONS'],
@@ -482,7 +484,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
     }
     
     /**
-     * Check if message is for current lead
+     * ENHANCED: Check if message is for current lead
      */
     isMessageForCurrentLead(messageData) {
         if (!this.currentPhoneNumber || !messageData.phoneNumber) {
@@ -492,7 +494,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
         const messagePhone = this.normalizePhoneNumber(messageData.phoneNumber);
         const leadPhone = this.normalizePhoneNumber(this.currentPhoneNumber);
         
-        console.log('📞 Comparing phones:', {
+        console.log('📞 Phone comparison:', {
             message: messagePhone,
             lead: leadPhone,
             match: messagePhone === leadPhone
@@ -502,7 +504,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
     }
     
     /**
-     * Enhanced incoming message handler with lead filtering
+     * ENHANCED: Incoming message handler with lead filtering
      */
     async handleIncomingWhatsAppMessage(message) {
         try {
@@ -530,11 +532,14 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                 currentLeadPhone: this.currentPhoneNumber
             });
             
-            // Check if message is for current lead
+            // IMPORTANT: Check if message is for current lead
             const isForCurrentLead = this.isMessageForCurrentLead(messageData);
             
+            // Only process if it's for the current lead OR we have no lead context (general mode)
             if (isForCurrentLead || !this.currentLeadId) {
-                // Emit to frontend
+                console.log('✅ Message accepted for processing');
+                
+                // Emit to frontend with lead context info
                 this.emit('message_received', {
                     ...messageData,
                     isLeadRelevant: isForCurrentLead,
@@ -546,6 +551,8 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                 await this.processCRMIntegration(messageData);
             } else {
                 console.log('🔽 Message filtered out - not for current lead');
+                console.log('   Incoming:', messageData.phoneNumber);
+                console.log('   Expected:', this.currentPhoneNumber);
             }
             
         } catch (error) {
@@ -555,7 +562,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
     }
     
     /**
-     * Enhanced CRM integration with better error handling
+     * ENHANCED: CRM integration with lead context
      */
     async processCRMIntegration(messageData) {
         try {
@@ -568,25 +575,20 @@ class WhatsAppBitrix24Handler extends EventEmitter {
             let leadId = this.currentLeadId; // Use current lead context if available
             
             // If we have lead context, get the contact from the lead
-            if (this.currentLeadId) {
-                const leadData = await this.getLeadWithPhoneNumber(this.currentLeadId);
-                if (leadData && leadData.CONTACT_ID) {
-                    contactId = leadData.CONTACT_ID;
-                    console.log('✅ Using contact from lead:', contactId);
+            if (this.currentLeadId && this.currentLeadData) {
+                if (this.currentLeadData.CONTACT_ID) {
+                    contactId = this.currentLeadData.CONTACT_ID;
+                    console.log('✅ Using contact from lead context:', contactId);
+                }
+            } else {
+                // If no lead context, find or create contact and lead
+                contactId = await this.findOrCreateContact(messageData);
+                if (!leadId) {
+                    leadId = await this.findOrCreateLead(messageData, contactId);
                 }
             }
             
-            // If no contact from lead, find or create contact
-            if (!contactId) {
-                contactId = await this.findOrCreateContact(messageData);
-            }
-            
-            // If no current lead, find or create one
-            if (!leadId) {
-                leadId = await this.findOrCreateLead(messageData, contactId);
-            }
-            
-            // Create activity with better error handling
+            // Create activity with lead context
             if (contactId || leadId) {
                 await this.createActivity(messageData, contactId, leadId);
             }
@@ -717,30 +719,31 @@ class WhatsAppBitrix24Handler extends EventEmitter {
     }
     
     /**
-     * Enhanced activity creation with better error handling
+     * ENHANCED: Activity creation with proper lead binding and direction handling
      */
     async createActivity(messageData, contactId, leadId) {
         try {
             const url = `https://${this.config.bitrix24Domain}/rest/crm.activity.add`;
             
-            // Build activity data with all required fields
+            // Determine direction: Agent messages are outgoing (2), others are incoming (1)
+            const direction = messageData.pushName === 'Agent' ? 2 : 1;
+            
             const activityData = {
                 fields: {
                     SUBJECT: `WhatsApp: ${messageData.text.substring(0, 50)}`,
                     DESCRIPTION: messageData.text,
-                    TYPE_ID: 4, // Use numeric ID for MESSAGE type
-                    DIRECTION: messageData.pushName === 'Agent' ? 2 : 1, // 1=INCOMING, 2=OUTGOING
+                    TYPE_ID: 4, // MESSAGE type
+                    DIRECTION: direction, // 1=INCOMING, 2=OUTGOING
                     COMPLETED: 'Y',
-                    PRIORITY: 2, // NORMAL priority as numeric
-                    RESPONSIBLE_ID: 1, // Set a valid user ID
-                    DEADLINE: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours from now
+                    PRIORITY: 2, // NORMAL
+                    RESPONSIBLE_ID: 1,
                     PROVIDER_ID: 'WHATSAPP_CUSTOM',
-                    PROVIDER_TYPE_ID: 'IM'
+                    PROVIDER_TYPE_ID: 'WHATSAPP'
                 },
                 access_token: this.config.accessToken
             };
             
-            // Add bindings properly
+            // Add proper bindings for lead context
             const bindings = [];
             if (leadId) {
                 bindings.push({
@@ -759,14 +762,26 @@ class WhatsAppBitrix24Handler extends EventEmitter {
                 activityData.fields.BINDINGS = bindings;
             }
             
-            console.log('📝 Creating activity with data:', JSON.stringify(activityData, null, 2));
+            // Add communication info if phone number available
+            if (messageData.phoneNumber) {
+                activityData.fields.COMMUNICATIONS = [{
+                    TYPE: 'PHONE',
+                    VALUE: messageData.phoneNumber
+                }];
+            }
+            
+            console.log('📝 Creating activity for lead context:', {
+                leadId,
+                contactId,
+                direction: direction === 1 ? 'INCOMING' : 'OUTGOING',
+                phone: messageData.phoneNumber
+            });
             
             const response = await axios.post(url, activityData);
             
             if (response.data?.result) {
                 console.log('✅ Activity created successfully:', response.data.result);
                 
-                // Emit activity created event
                 this.emit('activity_created', {
                     activityId: response.data.result,
                     leadId: leadId,
@@ -918,7 +933,7 @@ class WhatsAppBitrix24Handler extends EventEmitter {
     }
 
     /**
-     * Send outgoing message via WhatsApp with CRM activity logging
+     * ENHANCED: Send outgoing message via WhatsApp with CRM activity logging
      */
     async sendOutgoingMessage(chatId, message, files = []) {
         try {
@@ -1025,23 +1040,35 @@ class WhatsAppBitrix24Handler extends EventEmitter {
     }
 
     /**
-     * Send outgoing message with lead context
+     * ENHANCED: Send outgoing message with lead context
      */
     async sendOutgoingMessageWithContext(chatId, message, leadId = null) {
         try {
+            const targetLeadId = leadId || this.currentLeadId;
+            const targetPhone = chatId || this.currentPhoneNumber;
+            
+            if (!targetPhone) {
+                throw new Error('No phone number specified and no lead context available');
+            }
+            
+            console.log('📤 Sending message with context:', {
+                phone: targetPhone,
+                leadId: targetLeadId,
+                messagePreview: message.substring(0, 50)
+            });
+            
             // Use the existing sendOutgoingMessage method
-            const result = await this.sendOutgoingMessage(chatId, message);
+            const result = await this.sendOutgoingMessage(targetPhone, message);
             
             // If successful and we have lead context, log the activity
-            if (result.success && (leadId || this.currentLeadId)) {
-                const targetLeadId = leadId || this.currentLeadId;
+            if (result.success && targetLeadId) {
                 const phoneNumber = this.extractPhoneNumber(result.chatId);
                 
-                // Log as outgoing activity
+                // Log as outgoing activity with proper direction
                 await this.createActivity({
-                    phoneNumber: phoneNumber,
+                    phoneNumber: this.normalizePhoneNumber(phoneNumber),
                     text: message,
-                    pushName: 'Agent'
+                    pushName: 'Agent' // Indicates outgoing from agent
                 }, null, targetLeadId);
                 
                 console.log('✅ Outgoing message logged to lead:', targetLeadId);
@@ -1096,7 +1123,37 @@ class WhatsAppBitrix24Handler extends EventEmitter {
     }
     
     /**
-     * Get connection status with lead context
+     * ENHANCED: Initialize WhatsApp with lead context
+     */
+    async initWhatsAppWithLeadContext(data) {
+        try {
+            console.log('🎯 Initializing WhatsApp with lead context:', data.leadContext);
+            
+            // Set lead context if provided
+            if (data.leadContext) {
+                await this.initializeWithLeadContext(
+                    data.leadContext.leadId, 
+                    data.leadContext.phoneNumber
+                );
+            }
+            
+            // Use domain-based auth directory for persistence
+            if (data.domain) {
+                const authDir = this.getSessionPath(data.domain);
+                this.config.authDir = authDir;
+            }
+            
+            // Initialize WhatsApp connection
+            await this.initWhatsApp();
+            
+        } catch (error) {
+            console.error('❌ Error initializing WhatsApp with lead context:', error.message);
+            throw error;
+        }
+    }
+    
+    /**
+     * ENHANCED: Get connection status with lead context
      */
     getConnectionStatusWithContext() {
         const baseStatus = this.getConnectionStatus();
