@@ -444,24 +444,23 @@ socket.on('initialize_whatsapp', async function(data) {
         });
 
         // Handle client disconnect with cleanup
-        socket.on('disconnect', async function(reason) {
-            console.log('👋 User disconnected:', socket.id, 'Reason:', reason, 'at', new Date().toISOString());
+socket.on('disconnect', async function(reason) {
+        console.log('👋 User disconnected:', socket.id, 'Reason:', reason, 'at', new Date().toISOString());
+        
+        try {
+            // Set cleanup timeout to allow for reconnection
+            const cleanupTimeout = setTimeout(async () => {
+                console.log('🧹 Cleaning up resources for socket:', socket.id);
+                await cleanupSocketHandler(socket.id);
+            }, 30000); // 30 second grace period
             
-            try {
-                // Set cleanup timeout to allow for reconnection
-                const cleanupTimeout = setTimeout(async () => {
-                    console.log('🧹 Cleaning up resources for socket:', socket.id);
-                    await cleanupSocketHandler(socket.id);
-                }, 30000); // 30 second grace period
-                
-                connectionCleanupTimeouts.set(socket.id, cleanupTimeout);
-                
-            } catch (error) {
-                console.error('❌ Error during disconnect cleanup for socket', socket.id + ':', error.message);
-            }
+            connectionCleanupTimeouts.set(socket.id, cleanupTimeout);
             
-            console.log('📊 Remaining connections:', io.engine.clientsCount);
-        });
+        } catch (error) {
+            console.error('❌ Error during disconnect cleanup for socket', socket.id + ':', error.message);
+        }
+        
+        console.log('📊 Remaining connections:', io.engine.clientsCount);
     });
 
     // Helper function to setup handler event listeners
